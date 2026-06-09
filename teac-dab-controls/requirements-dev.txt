@@ -1,0 +1,2 @@
+# Development/test-only dependencies (not needed to run the plugin).
+pytest>=7.0

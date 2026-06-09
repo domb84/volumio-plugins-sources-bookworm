@@ -1,0 +1,458 @@
+{
+  "page": {
+    "label": "Teac DAB Controls Configuration"
+  },
+  "sections": [
+    {
+      "id": "buttons",
+      "element": "section",
+      "label": "Button ADC Pin Configuration",
+      "icon": "fa-cogs",
+      "description": "Pin configuration to read button presses from an MCP3008 ADC.",
+      "onSave": {
+        "type": "controller",
+        "endpoint":"user_interface/teac-dab-controls",
+        "method":"saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "spi",
+          "spi_bus",
+          "buttons_clk",
+          "buttons_miso",
+          "buttons_mosi",
+          "buttons_cs",
+          "buttons_channel1",
+          "buttons_channel2",
+          "button_poll_rate",
+          "button_debounce_rate",
+          "button_cooldown_rate"
+        ]
+      },
+      "content": [
+        {
+          "id": "spi",
+          "element": "switch",
+          "label": "SPI mode",
+          "value": false
+        },
+        {
+          "id": "spi_bus",
+          "type":"number",
+          "element": "input",
+          "label": "SPI bus (0 or 1)",
+          "value": ""
+        },
+        {
+          "id": "buttons_clk",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons CLK pin",
+          "value": ""
+        },
+        {
+          "id": "buttons_miso",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons MISO pin",
+          "value": ""
+        },
+        {
+          "id": "buttons_mosi",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons MOSI pin",
+          "value": ""
+        },
+        {
+          "id": "buttons_cs",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons CS pin",
+          "value": ""
+        },
+        {
+          "id": "buttons_channel1",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons Channel 1 (MCP3008) pin",
+          "value": ""
+        },
+        {
+          "id": "buttons_channel2",
+          "type":"number",
+          "element": "input",
+          "label": "Buttons Channel 2 (MCP3008) pin",
+          "value": ""
+        },
+        {
+          "id": "button_poll_rate",
+          "type":"number",
+          "element": "input",
+          "label": "Polling rate in ms for reading button presses",
+          "value": ""
+        },
+        {
+          "id": "button_debounce_rate",
+          "type":"number",
+          "element": "input",
+          "label": "Debounce duration in ms for button presses",
+          "value": ""
+        },
+        {
+          "id": "button_cooldown_rate",
+          "type":"number",
+          "element": "input",
+          "label": "Cooldown duration in ms for button presses",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "button_resistance",
+      "element": "section",
+      "label": "Button Channel & Value (Advanced)",
+      "icon": "fa-sliders",
+      "description": "Advanced/manual setup. Most users should use 'Configure Buttons (Capture)' below instead. Turn on the switch to edit the raw channel/value mappings by hand. Enter as channel, value (e.g. 0, 12); a range like 0, 24-25 is also allowed.",
+      "onSave": {
+        "type": "controller",
+        "endpoint":"user_interface/teac-dab-controls",
+        "method":"saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "btn_enter",
+          "btn_radio",
+          "btn_spotify",
+          "btn_stop",
+          "btn_info",
+          "btn_favourite",
+          "btn_main_menu",
+          "btn_back",
+          "btn_no_press_channel1",
+          "btn_no_press_channel2",
+          "btn_remove_favourite"
+        ]
+      },
+      "content": [
+        {
+          "id": "show_advanced_values",
+          "element": "switch",
+          "label": "Edit values manually",
+          "value": false
+        },
+        {
+          "id": "btn_enter",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Enter",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_radio",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Radio",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_spotify",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Spotify",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_stop",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Stop",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_info",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Info",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_favourite",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Favourite",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_main_menu",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Main Menu",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_back",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for the Back button",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_no_press_channel1",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value when no button is pressed on channel 1",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_no_press_channel2",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value when no button is pressed on channel 2",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_remove_favourite",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Remove Favourite",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        }
+      ]
+    },
+    {
+      "id": "button_capture",
+      "element": "section",
+      "label": "Configure Buttons (Capture)",
+      "icon": "fa-magic",
+      "description": "Easiest way to set up buttons: click 'Configure' for a button, press that physical button on the unit, then press it again to confirm. Configure as many buttons as you like, then click 'Save & Restart Controls' to apply them all at once. No need to read or type resistance values by hand.",
+      "content": [
+        {
+          "id": "capture_btn_enter",
+          "element": "button",
+          "label": "Configure Enter",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnEnter",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_radio",
+          "element": "button",
+          "label": "Configure Radio",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnRadio",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_spotify",
+          "element": "button",
+          "label": "Configure Spotify",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnSpotify",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_stop",
+          "element": "button",
+          "label": "Configure Stop",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnStop",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_info",
+          "element": "button",
+          "label": "Configure Info",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnInfo",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_favourite",
+          "element": "button",
+          "label": "Configure Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_remove_favourite",
+          "element": "button",
+          "label": "Configure Remove Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnRemoveFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_main_menu",
+          "element": "button",
+          "label": "Configure Main Menu",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnMainMenu",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_back",
+          "element": "button",
+          "label": "Configure Back",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnBack",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_save",
+          "element": "button",
+          "label": "Save & Restart Controls",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "saveCapture",
+            "data": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "encoder",
+      "element": "section",
+      "label": "Rotary Encoder Pin Configuration",
+      "icon": "fa-cogs",
+      "description": "Pin configuration for your rotary encoder for menu navigation.",
+      "onSave": {
+        "type": "controller",
+        "endpoint":"user_interface/teac-dab-controls",
+        "method":"saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "rot_enc_A",
+          "rot_enc_B"
+        ]
+      },
+      "content": [
+        {
+          "id": "rot_enc_A",
+          "type":"number",
+          "element": "input",
+          "label": "Rotary encoder pin A",
+          "value": ""
+        },
+        {
+          "id": "rot_enc_B",
+          "type":"number",
+          "element": "input",
+          "label": "Rotary encoder pin B",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "lcd",
+      "element": "section",
+      "label": "16x2 Display Pin Configuration",
+      "icon": "fa-cogs",
+      "description": "Pin configuration for your 16x2 VFD or LCD display.",
+      "onSave": {
+        "type": "controller",
+        "endpoint":"user_interface/teac-dab-controls",
+        "method":"saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "lcd_rs",
+          "lcd_e",
+          "lcd_d4",
+          "lcd_d5",
+          "lcd_d6",
+          "lcd_d7"
+        ]
+      },
+      "content": [
+        {
+          "id": "lcd_rs",
+          "type":"number",
+          "element": "input",
+          "label": "LCD RS pin",
+          "value": ""
+        },
+        {
+          "id": "lcd_e",
+          "type":"number",
+          "element": "input",
+          "label": "LCD E pin",
+          "value": ""
+        },
+        {
+          "id": "lcd_d4",
+          "type":"number",
+          "element": "input",
+          "label": "LCD digital 4 pin",
+          "value": ""
+        },
+        {
+          "id": "lcd_d5",
+          "type":"number",
+          "element": "input",
+          "label": "LCD digital 5 pin",
+          "value": ""
+        },
+        {
+          "id": "lcd_d6",
+          "type":"number",
+          "element": "input",
+          "label": "LCD digital 6 pin",
+          "value": ""
+        },
+        {
+          "id": "lcd_d7",
+          "type":"number",
+          "element": "input",
+          "label": "LCD digital 7 pin",
+          "value": ""
+        }
+      ]
+    }
+  ]
+}
