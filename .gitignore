@@ -30,6 +30,11 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # TypeScript
 *.tsbuildinfo
 
@@ -39,3 +44,4 @@ coverage/
 /data/
 /home/
 /my_dmd2_music_working_not_latest/
+

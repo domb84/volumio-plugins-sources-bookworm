@@ -1,0 +1,23 @@
+# Runtime dependencies for teac-dab-controls.
+# Installed into a dedicated virtualenv by install.sh.
+
+# Volumio websocket client. Must stay on the socketio 4.x / engineio 3.x line
+# to remain compatible with Volumio's socket.io server protocol.
+python-engineio==3.14.2
+python-socketio[client]>=4,<5
+
+# GPIO / SPI hardware access. The MCP3008 button ADC is read directly via
+# bitbanged GPIO or spidev (see includes/controls.py) - no Adafruit stack needed.
+RPi.GPIO
+pigpio
+spidev
+
+# REST API server
+fastapi
+uvicorn
+
+# Retry helper used by the Volumio client
+retrying
+
+# LCD menu library (forked)
+git+https://github.com/domb84/rpi-lcd-menu.git

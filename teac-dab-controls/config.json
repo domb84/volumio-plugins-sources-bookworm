@@ -1,0 +1,126 @@
+{
+    "spi": {
+        "type": "boolean",
+        "value": false
+    },
+    "spi_bus": {
+        "type": "number",
+        "value": "1"
+    },
+    "buttons_clk": {
+        "type": "number",
+        "value": "11"
+    },
+    "buttons_miso": {
+        "type": "number",
+        "value": "9"
+    },
+    "buttons_mosi": {
+        "type": "number",
+        "value": "10"
+    },
+    "buttons_cs": {
+        "type": "number",
+        "value": "22"
+    },
+    "buttons_channel1": {
+        "type": "number",
+        "value": "0"
+    },
+    "buttons_channel2": {
+        "type": "number",
+        "value": "7"
+    },
+    "button_poll_rate": {
+        "type": "number",
+        "value": "10"
+    },
+    "button_debounce_rate": {
+        "type": "number",
+        "value": "50"
+    },
+    "button_cooldown_rate": {
+        "type": "number",
+        "value": "500"
+    },
+    "rot_enc_A": {
+        "type": "number",
+        "value": "17"
+    },
+    "rot_enc_B": {
+        "type": "number",
+        "value": "27"
+    },
+    "lcd_rs": {
+        "type": "number",
+        "value": "7"
+    },
+    "lcd_e": {
+        "type": "number",
+        "value": "8"
+    },
+    "lcd_d4": {
+        "type": "number",
+        "value": "25"
+    },
+    "lcd_d5": {
+        "type": "number",
+        "value": "24"
+    },
+    "lcd_d6": {
+        "type": "number",
+        "value": "23"
+    },
+    "lcd_d7": {
+        "type": "number",
+        "value": "15"
+    },
+    "btn_enter": {
+        "type": "text",
+        "value": "0, 24-25"
+    },
+    "btn_radio": {
+        "type": "text",
+        "value": "0, 29-30"
+    },
+    "btn_spotify": {
+        "type": "text",
+        "value": "0, 12"
+    },
+    "btn_stop": {
+        "type": "text",
+        "value": "0, 31-32"
+    },
+    "btn_info": {
+        "type": "text",
+        "value": "0, 26-27"
+    },
+    "btn_favourite": {
+        "type": "text",
+        "value": "0, 23"
+    },
+    "btn_remove_favourite": {
+        "type": "text",
+        "value": "7, 28"
+    },
+    "btn_main_menu": {
+        "type": "text",
+        "value": "0, 28"
+    },
+    "btn_back": {
+        "type": "text",
+        "value": "0, 21-22"
+    },
+    "btn_dimmer": {
+        "type": "text",
+        "value": "0, 20"
+    },
+    "btn_no_press_channel1": {
+        "type": "text",
+        "value": "0, 16"
+    },
+    "btn_no_press_channel2": {
+        "type": "text",
+        "value": "7, 16"
+    }
+}
