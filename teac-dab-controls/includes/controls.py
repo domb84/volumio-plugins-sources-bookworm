@@ -17,6 +17,7 @@ from .utils import parse_button_config
 # us to report raw button readings instead of acting on them.
 CAPTURE_FLAG_PATH = "/tmp/teac-dab-controls-capture-on"
 CAPTURE_READING_PATH = "/tmp/teac-dab-controls-capture.json"
+CAPTURE_BASELINE_PATH = "/tmp/teac-dab-controls-capture-baseline.json"
 
 @dataclass
 class ControlsConfig:
@@ -144,6 +145,7 @@ class Controls:
         if baseline is None:
             self._capture_baseline[channel] = value
             self._capture_pressed[channel] = False
+            self._publish_capture_baselines()
             return
         if value == baseline:
             self._capture_pressed[channel] = False  # released
@@ -152,6 +154,14 @@ class Controls:
             self._capture_pressed[channel] = True
             self._capture_seq += 1
             self._publish_capture_reading(channel, value, self._capture_seq)
+
+    def _publish_capture_baselines(self) -> None:
+        """Publish the per-channel resting values so the settings page can capture the no-press baseline."""
+        try:
+            with open(CAPTURE_BASELINE_PATH, "w") as handle:
+                json.dump(self._capture_baseline, handle)
+        except Exception as e:
+            logger.debug("Could not publish capture baselines: %s", e)
 
     def _publish_capture_reading(self, channel: int, value: int, seq: int) -> None:
         """Publish a detected press so the settings page can learn a button value."""

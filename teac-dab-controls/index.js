@@ -91,27 +91,27 @@ teacdabcontrols.prototype.getUIConfig = function() {
             uiconf.sections[0].content[8].value = self.config.get('button_poll_rate');
             uiconf.sections[0].content[9].value = self.config.get('button_debounce_rate');
             uiconf.sections[0].content[10].value = self.config.get('button_cooldown_rate');
-            // sections[1].content[0] is the "Edit values manually" toggle
-            uiconf.sections[1].content[1].value = self.config.get('btn_enter');
-            uiconf.sections[1].content[2].value = self.config.get('btn_radio');
-            uiconf.sections[1].content[3].value = self.config.get('btn_spotify');
-            uiconf.sections[1].content[4].value = self.config.get('btn_stop');
-            uiconf.sections[1].content[5].value = self.config.get('btn_info');
-            uiconf.sections[1].content[6].value = self.config.get('btn_favourite');
-            uiconf.sections[1].content[7].value = self.config.get('btn_main_menu');
-            uiconf.sections[1].content[8].value = self.config.get('btn_back');
-            uiconf.sections[1].content[9].value = self.config.get('btn_no_press_channel1');
-            uiconf.sections[1].content[10].value = self.config.get('btn_no_press_channel2');
-            uiconf.sections[1].content[11].value = self.config.get('btn_remove_favourite');
-            // sections[2] is "Configure Buttons (Capture)" — action buttons, no stored values
-            uiconf.sections[3].content[0].value = self.config.get('rot_enc_A');
-            uiconf.sections[3].content[1].value = self.config.get('rot_enc_B');
-            uiconf.sections[4].content[0].value = self.config.get('lcd_rs');
-            uiconf.sections[4].content[1].value = self.config.get('lcd_e');
-            uiconf.sections[4].content[2].value = self.config.get('lcd_d4');
-            uiconf.sections[4].content[3].value = self.config.get('lcd_d5');
-            uiconf.sections[4].content[4].value = self.config.get('lcd_d6');
-            uiconf.sections[4].content[5].value = self.config.get('lcd_d7');
+            // sections[1] is "Configure Buttons (Capture)" — action buttons, no stored values
+            uiconf.sections[2].content[0].value = self.config.get('rot_enc_A');
+            uiconf.sections[2].content[1].value = self.config.get('rot_enc_B');
+            uiconf.sections[3].content[0].value = self.config.get('lcd_rs');
+            uiconf.sections[3].content[1].value = self.config.get('lcd_e');
+            uiconf.sections[3].content[2].value = self.config.get('lcd_d4');
+            uiconf.sections[3].content[3].value = self.config.get('lcd_d5');
+            uiconf.sections[3].content[4].value = self.config.get('lcd_d6');
+            uiconf.sections[3].content[5].value = self.config.get('lcd_d7');
+            // sections[4] is the advanced section; content[0] is the "Edit values manually" toggle
+            uiconf.sections[4].content[1].value = self.config.get('btn_enter');
+            uiconf.sections[4].content[2].value = self.config.get('btn_radio');
+            uiconf.sections[4].content[3].value = self.config.get('btn_spotify');
+            uiconf.sections[4].content[4].value = self.config.get('btn_stop');
+            uiconf.sections[4].content[5].value = self.config.get('btn_info');
+            uiconf.sections[4].content[6].value = self.config.get('btn_favourite');
+            uiconf.sections[4].content[7].value = self.config.get('btn_main_menu');
+            uiconf.sections[4].content[8].value = self.config.get('btn_back');
+            uiconf.sections[4].content[9].value = self.config.get('btn_no_press_channel1');
+            uiconf.sections[4].content[10].value = self.config.get('btn_no_press_channel2');
+            uiconf.sections[4].content[11].value = self.config.get('btn_remove_favourite');
             defer.resolve(uiconf);
         })
         .fail(function () {
@@ -182,8 +182,10 @@ teacdabcontrols.prototype.getConfigurationFiles = function() {
 
 var CAPTURE_FLAG_PATH = '/tmp/teac-dab-controls-capture-on';
 var CAPTURE_READING_PATH = '/tmp/teac-dab-controls-capture.json';
+var CAPTURE_BASELINE_PATH = '/tmp/teac-dab-controls-capture-baseline.json';
 var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much inactivity
 var CAPTURE_POLL_MS = 200;
+var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
 
 // config key -> friendly label shown in toasts
 var CAPTURE_LABELS = {
@@ -209,25 +211,33 @@ teacdabcontrols.prototype.captureBtnRemoveFavourite = function () { return this.
 teacdabcontrols.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 teacdabcontrols.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 
+// Begin a capture session if one isn't already running. The session keeps
+// the controls paused (via the flag file) until the user saves or goes
+// idle, so button presses never reach the device while configuring.
+// Returns false if the session could not be started.
+teacdabcontrols.prototype.ensureCaptureSession = function () {
+    const self = this;
+    if (self._captureSession) { return true; }
+
+    try {
+        fs.writeFileSync(CAPTURE_FLAG_PATH, '');
+    } catch (e) {
+        self.logger.error('Teac DAB Controls - could not start capture: ' + e);
+        self.commandRouter.pushToastMessage('error', 'Button Capture', 'Could not start capture mode.');
+        return false;
+    }
+    try { fs.removeSync(CAPTURE_READING_PATH); } catch (e) {}
+    try { fs.removeSync(CAPTURE_BASELINE_PATH); } catch (e) {}
+    self._captureSession = { lastSeq: null };
+    self._captureTimer = setInterval(function () { self.pollCapture(); }, CAPTURE_POLL_MS);
+    return true;
+};
+
 teacdabcontrols.prototype.startCapture = function (targetKey) {
     const self = this;
     const label = CAPTURE_LABELS[targetKey] || targetKey;
 
-    // Begin a capture session if one isn't already running. The session keeps
-    // the controls paused (via the flag file) until the user saves or goes
-    // idle, so button presses never reach the device while configuring.
-    if (!self._captureSession) {
-        try {
-            fs.writeFileSync(CAPTURE_FLAG_PATH, '');
-        } catch (e) {
-            self.logger.error('Teac DAB Controls - could not start capture: ' + e);
-            self.commandRouter.pushToastMessage('error', 'Button Capture', 'Could not start capture mode.');
-            return libQ.resolve();
-        }
-        try { fs.removeSync(CAPTURE_READING_PATH); } catch (e) {}
-        self._captureSession = { lastSeq: null };
-        self._captureTimer = setInterval(function () { self.pollCapture(); }, CAPTURE_POLL_MS);
-    }
+    if (!self.ensureCaptureSession()) { return libQ.resolve(); }
 
     // (Re)target the session at the button the user just clicked.
     self._captureSession.target = targetKey;
@@ -296,6 +306,64 @@ teacdabcontrols.prototype.pollCapture = function () {
     }
 };
 
+// Capture the resting (no-press) value of both ADC channels. The python side
+// measures each channel's baseline as soon as capture mode starts; we just
+// need the user to leave the buttons alone for a moment, then read it back.
+teacdabcontrols.prototype.captureBaseResistance = function () {
+    const self = this;
+
+    if (!self.ensureCaptureSession()) { return libQ.resolve(); }
+
+    const session = self._captureSession;
+    // Deselect any pending button target; this capture wants no presses at all.
+    session.target = null;
+    session.candidate = null;
+    session.deadline = Date.now() + CAPTURE_IDLE_TIMEOUT_MS;
+
+    const startSeq = session.lastSeq;
+    self.commandRouter.pushToastMessage('info', 'Button Capture',
+        'Capturing base resistance. Do NOT press any buttons for the next ' +
+        (BASELINE_SETTLE_MS / 1000) + ' seconds...');
+
+    setTimeout(function () { self.finishBaseResistanceCapture(session, startSeq); }, BASELINE_SETTLE_MS);
+    return libQ.resolve();
+};
+
+teacdabcontrols.prototype.finishBaseResistanceCapture = function (session, startSeq) {
+    const self = this;
+    if (self._captureSession !== session) { return; }  // session ended in the meantime
+
+    if (session.lastSeq !== startSeq) {
+        self.commandRouter.pushToastMessage('error', 'Button Capture',
+            'A button press was detected while capturing the base resistance. Try again without pressing anything.');
+        return;
+    }
+
+    let baselines = null;
+    try { baselines = fs.readJsonSync(CAPTURE_BASELINE_PATH); } catch (e) {}
+
+    const ch1 = self.config.get('buttons_channel1');
+    const ch2 = self.config.get('buttons_channel2');
+    const val1 = baselines ? baselines[String(ch1)] : null;
+    const val2 = baselines ? baselines[String(ch2)] : null;
+
+    if (val1 == null || val2 == null) {
+        self.commandRouter.pushToastMessage('error', 'Button Capture',
+            'Could not read the base resistance for both channels. Wait a moment and try again.');
+        return;
+    }
+
+    if (!self._capturedValues) { self._capturedValues = {}; }
+    self.config.set('btn_no_press_channel1', ch1 + ', ' + val1);
+    self.config.set('btn_no_press_channel2', ch2 + ', ' + val2);
+    self._capturedValues['No Press Channel 1'] = ch1 + ', ' + val1;
+    self._capturedValues['No Press Channel 2'] = ch2 + ', ' + val2;
+
+    self.commandRouter.pushToastMessage('success', 'Button Capture',
+        'Captured base resistance: channel ' + ch1 + ' = ' + val1 + ', channel ' + ch2 + ' = ' + val2 +
+        '. Configure another button, or click "Save & Restart Controls".');
+};
+
 teacdabcontrols.prototype.endCaptureSession = function () {
     const self = this;
     if (self._captureTimer) {
@@ -305,6 +373,7 @@ teacdabcontrols.prototype.endCaptureSession = function () {
     self._captureSession = null;
     try { fs.removeSync(CAPTURE_FLAG_PATH); } catch (e) {}
     try { fs.removeSync(CAPTURE_READING_PATH); } catch (e) {}
+    try { fs.removeSync(CAPTURE_BASELINE_PATH); } catch (e) {}
 };
 
 // Apply everything captured this session and restart the controls once.

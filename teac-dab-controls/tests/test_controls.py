@@ -66,6 +66,7 @@ class TestCaptureReading:
         c._capture_pressed = {}
         c._capture_seq = 0
         c._publish_capture_reading = Mock()
+        c._publish_capture_baselines = Mock()
         return c
 
     def test_first_reading_is_baseline_not_a_press(self):
@@ -73,6 +74,14 @@ class TestCaptureReading:
         c._handle_capture_reading(0, 16)
         c._publish_capture_reading.assert_not_called()
         assert c._capture_baseline[0] == 16
+
+    def test_baseline_is_published_when_established(self):
+        c = self._controls()
+        c._handle_capture_reading(0, 16)   # ch0 baseline -> publish
+        c._handle_capture_reading(0, 16)   # still resting, no re-publish
+        c._handle_capture_reading(1, 20)   # ch1 baseline -> publish again
+        assert c._publish_capture_baselines.call_count == 2
+        assert c._capture_baseline == {0: 16, 1: 20}
 
     def test_press_publishes_once(self):
         c = self._controls()

@@ -19,7 +19,7 @@ apt-get remove -y pigpio python3-dev
 rm -rf "${VENV_PARENT}"
 
 # Remove the runtime marker/capture files the plugin drops in /tmp
-rm -f /tmp/teac-dab-controls-restarting /tmp/teac-dab-controls-capture-on /tmp/teac-dab-controls-capture.json
+rm -f /tmp/teac-dab-controls-restarting /tmp/teac-dab-controls-capture-on /tmp/teac-dab-controls-capture.json /tmp/teac-dab-controls-capture-baseline.json
 
 # Remove service and reload daemons
 rm -f /lib/systemd/system/teac-dab-controls.service

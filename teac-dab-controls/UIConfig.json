@@ -110,135 +110,11 @@
       ]
     },
     {
-      "id": "button_resistance",
-      "element": "section",
-      "label": "Button Channel & Value (Advanced)",
-      "icon": "fa-sliders",
-      "description": "Advanced/manual setup. Most users should use 'Configure Buttons (Capture)' below instead. Turn on the switch to edit the raw channel/value mappings by hand. Enter as channel, value (e.g. 0, 12); a range like 0, 24-25 is also allowed.",
-      "onSave": {
-        "type": "controller",
-        "endpoint":"user_interface/teac-dab-controls",
-        "method":"saveOptions"
-      },
-      "saveButton": {
-        "label": "Save",
-        "data": [
-          "btn_enter",
-          "btn_radio",
-          "btn_spotify",
-          "btn_stop",
-          "btn_info",
-          "btn_favourite",
-          "btn_main_menu",
-          "btn_back",
-          "btn_no_press_channel1",
-          "btn_no_press_channel2",
-          "btn_remove_favourite"
-        ]
-      },
-      "content": [
-        {
-          "id": "show_advanced_values",
-          "element": "switch",
-          "label": "Edit values manually",
-          "value": false
-        },
-        {
-          "id": "btn_enter",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Enter",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_radio",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Radio",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_spotify",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Spotify",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_stop",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Stop",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_info",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Info",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_favourite",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Favourite",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_main_menu",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Main Menu",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_back",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for the Back button",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_no_press_channel1",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value when no button is pressed on channel 1",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_no_press_channel2",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value when no button is pressed on channel 2",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_remove_favourite",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Remove Favourite",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        }
-      ]
-    },
-    {
       "id": "button_capture",
       "element": "section",
       "label": "Configure Buttons (Capture)",
       "icon": "fa-magic",
-      "description": "Easiest way to set up buttons: click 'Configure' for a button, press that physical button on the unit, then press it again to confirm. Configure as many buttons as you like, then click 'Save & Restart Controls' to apply them all at once. No need to read or type resistance values by hand.",
+      "description": "Easiest way to set up buttons: click 'Configure' for a button, press that physical button on the unit, then press it again to confirm. Use 'Capture Base Resistance' to record the resting value while pressing nothing. Configure as many buttons as you like, then click 'Save & Restart Controls' to apply them all at once. No need to read or type resistance values by hand.",
       "content": [
         {
           "id": "capture_btn_enter",
@@ -336,6 +212,17 @@
             "type": "controller",
             "endpoint": "user_interface/teac-dab-controls",
             "method": "captureBtnBack",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_base_resistance",
+          "element": "button",
+          "label": "Capture Base Resistance (press nothing)",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBaseResistance",
             "data": []
           }
         },
@@ -451,6 +338,130 @@
           "element": "input",
           "label": "LCD digital 7 pin",
           "value": ""
+        }
+      ]
+    },
+    {
+      "id": "button_resistance",
+      "element": "section",
+      "label": "Button Channel & Value (Advanced)",
+      "icon": "fa-sliders",
+      "description": "Advanced/manual setup. Most users should use 'Configure Buttons (Capture)' above instead. Turn on the switch to edit the raw channel/value mappings by hand. Enter as channel, value (e.g. 0, 12); a range like 0, 24-25 is also allowed.",
+      "onSave": {
+        "type": "controller",
+        "endpoint":"user_interface/teac-dab-controls",
+        "method":"saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "btn_enter",
+          "btn_radio",
+          "btn_spotify",
+          "btn_stop",
+          "btn_info",
+          "btn_favourite",
+          "btn_main_menu",
+          "btn_back",
+          "btn_no_press_channel1",
+          "btn_no_press_channel2",
+          "btn_remove_favourite"
+        ]
+      },
+      "content": [
+        {
+          "id": "show_advanced_values",
+          "element": "switch",
+          "label": "Edit values manually",
+          "value": false
+        },
+        {
+          "id": "btn_enter",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Enter",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_radio",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Radio",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_spotify",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Spotify",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_stop",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Stop",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_info",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Info",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_favourite",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Favourite",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_main_menu",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Main Menu",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_back",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for the Back button",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_no_press_channel1",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value when no button is pressed on channel 1",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_no_press_channel2",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value when no button is pressed on channel 2",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_remove_favourite",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Remove Favourite",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
         }
       ]
     }
