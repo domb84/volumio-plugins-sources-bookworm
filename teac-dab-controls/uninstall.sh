@@ -1,17 +1,19 @@
 #!/bin/bash
 
+PLUGIN_DIR="/data/plugins/user_interface/teac-dab-controls"
+VENV_DIR="${PLUGIN_DIR}/venv"
+
 # Uninstall dependendencies
-# apt-get remove -y
 echo "Uninstalling teac-dab-controls Dependencies"
 
-# Remove the required packages via apt-get
+# Remove the required apt packages
 apt-get remove -y pigpio python3-dev
 
-# Remove python modules
-pip3 uninstall -y python-engineio==3.14.2 python-socketio[client]==4.6.0 adafruit-blinka Adafruit-PlatformDetect adafruit-python-shell adafruit_circuitpython_mcp3xxx adafruit_circuitpython_bitbangio RPi.GPIO pigpio retrying RpiLCDMenu
+# Remove the python virtual environment (all python deps live in here)
+rm -rf "${VENV_DIR}"
 
 # Remove service and reload daemons
-rm -f  /lib/systemd/system/teac-dab-controls.service
+rm -f /lib/systemd/system/teac-dab-controls.service
 systemctl daemon-reload -q
 
 echo "Done"
