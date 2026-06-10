@@ -397,12 +397,16 @@ class MenuManager:
             self.menu.items = []
 
         # sort menu by type if it wasnt sorted already
+        # Items arrive with every key present but possibly None (volumio.py
+        # always sets them), so `or ''`/`or 0` is needed rather than .get()
+        # defaults — an unnamed Spotify playlist would otherwise crash the sort
+        # and abort the whole menu build.
         if menu and menu[0].get('position') is not None:
-            menu = sorted(menu, key=lambda x: (x.get('position')))
+            menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
             menu = sorted(menu, key=lambda x: (
-                (any(x.get('type', '').endswith(folder_type) for folder_type in folderTypes),  # Check if any folderType matches the end of the 'type'
-                x.get('title', '').strip().lower()  # Sort by title in ascending order
+                (any((x.get('type') or '').endswith(folder_type) for folder_type in folderTypes),  # Check if any folderType matches the end of the 'type'
+                (x.get('title') or '').strip().lower()  # Sort by title in ascending order
             )))
 
         # parse menu
@@ -416,7 +420,8 @@ class MenuManager:
                 buttonService = i.get('service', None)
                 buttonType = i.get('type', None)
 
-                if buttonName == "":
+                # covers both "" and None (e.g. an unnamed Spotify playlist)
+                if not buttonName:
                     buttonName = f"Untitled {counter}"
 
                 if buttonType and any(buttonType.endswith(folder_type) for folder_type in folderTypes):
@@ -425,7 +430,7 @@ class MenuManager:
                 if buttonService:
                             menuItem = FunctionItem(buttonName, self.resolve_item, [counter, buttonName, buttonLink, buttonService])
                 # genres in webradio do not seem to return it's service type, so capture this and resolve
-                elif not buttonService and re.match(r'radio(/.+)?', buttonLink):
+                elif not buttonService and buttonLink and re.match(r'radio(/.+)?', buttonLink):
                     menuItem = FunctionItem(buttonName, self.resolve_item, [counter, buttonName, buttonLink, 'webradio'])
                 else:
                     menuItem = FunctionItem(buttonName, self.resolve_item, [counter, buttonName, buttonLink, None])
