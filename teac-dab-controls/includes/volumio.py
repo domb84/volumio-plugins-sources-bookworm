@@ -8,6 +8,11 @@ logger = logging.getLogger("Volumio Functions")
 
 _INFO_DEBOUNCE_SECONDS = 0.4
 
+# How long after a favourite removal to wait before re-browsing the current
+# list. Matches the toast display time so the "removed" message is shown before
+# the rebuilt menu renders over it.
+_REMOVE_REFRESH_DELAY_SECONDS = 2.0
+
 # set socketio logging
 logging.getLogger('socketio').setLevel(logging.WARNING)
 
@@ -34,6 +39,8 @@ class Volumio:
         self._pending_info_timer = None
         self._pending_info_lock = threading.Lock()
         self._force_next_state = False  # next pushState was explicitly requested (info button)
+        self._last_browse_uri = None    # uri of the list currently on screen (for post-removal refresh)
+        self._refresh_browse = False    # next pushBrowseLibrary replaces the menu without history
 
         self.ws_api = "http://localhost:3000"
         self.sio = socketio.Client(logger=False, engineio_logger=False,reconnection=True)
@@ -105,6 +112,7 @@ class Volumio:
 
     def _process_button_item(self, button: str):
         if button == 'menu':
+            self._last_browse_uri = None
             self.get_browse_sources()
             logger.debug("%s", button)
             return
@@ -150,6 +158,28 @@ class Volumio:
         parsed = self._parse_favourite(item['remove_favourite'])
         if parsed is not None:
             self.remove_favourite(*parsed)
+            self._schedule_browse_refresh()
+
+    def _schedule_browse_refresh(self):
+        """Re-browse the list currently on screen after a favourite removal.
+
+        Volumio confirms a removal with a toast but never pushes an updated
+        list, so without this the LCD keeps showing the menu built when the
+        list was entered (the removed item only disappears after re-entering
+        the menu). The delay lets the toast display first; the resulting push
+        replaces the current menu without being added to back-button history.
+        """
+        uri = self._last_browse_uri
+        if not uri:
+            return
+        timer = threading.Timer(_REMOVE_REFRESH_DELAY_SECONDS,
+                                self._refresh_current_browse, args=(uri,))
+        timer.daemon = True
+        timer.start()
+
+    def _refresh_current_browse(self, uri):
+        self._refresh_browse = True
+        self.get_sources(uri)
 
     def _send(self, command, args=None, callback=None, namespace=None):
         self.sio.emit(command, args, callback=callback, namespace=namespace)
@@ -339,7 +369,8 @@ class Volumio:
 
         result = json.dumps(sources_list)
         logger.debug("%s", result)
-        self.menuManagerQ.put({'menu': result})
+        refresh, self._refresh_browse = self._refresh_browse, False
+        self.menuManagerQ.put({'menu': result, 'remember': not refresh})
 
     def _on_push_browse_sources(self, *args):
         if not args or not args[0]:
@@ -380,6 +411,7 @@ class Volumio:
 
     def get_sources(self, link: str) -> None:
         logger.debug("Get sources from %s", link)
+        self._last_browse_uri = link
         self._send('browseLibrary', {'uri': link})
 
     def add_favourite(self, title: Optional[str], link: Optional[str], service: Optional[str]) -> None:

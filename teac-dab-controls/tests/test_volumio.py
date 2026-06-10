@@ -118,6 +118,7 @@ class TestFavourites:
         v = Volumio.__new__(Volumio)
         v.add_favourite = Mock()
         v.remove_favourite = Mock()
+        v._schedule_browse_refresh = Mock()
         return v
 
     def test_memory_item_adds_favourite(self):
@@ -143,3 +144,55 @@ class TestFavourites:
         v._process_remove_favourite_item = Mock()
         v._process_queue_item({"remove_favourite": "x"})
         v._process_remove_favourite_item.assert_called_once()
+
+    def test_remove_favourite_schedules_a_browse_refresh(self):
+        v = self._volumio()
+        v._process_remove_favourite_item({"remove_favourite": json.dumps(
+            {"title": "T", "uri": "U", "service": "S"})})
+        v._schedule_browse_refresh.assert_called_once()
+
+    def test_invalid_payload_does_not_schedule_a_refresh(self):
+        v = self._volumio()
+        v._process_remove_favourite_item({"remove_favourite": "{not valid json"})
+        v._schedule_browse_refresh.assert_not_called()
+
+
+class TestBrowseRefreshAfterRemoval:
+    """Removing a favourite re-browses the on-screen list so the menu rebuilds."""
+
+    _BROWSE_PUSH = {"navigation": {"lists": [{"items": [
+        {"title": "Song", "uri": "u1", "service": "mpd", "type": "song", "position": 0},
+    ]}]}}
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v.menuManagerQ = queue.Queue()
+        v._last_browse_uri = None
+        v._refresh_browse = False
+        v.get_sources = Mock()
+        return v
+
+    def test_no_refresh_when_no_list_has_been_browsed(self):
+        v = self._volumio()
+        v._schedule_browse_refresh()  # e.g. still on the sources menu
+        v.get_sources.assert_not_called()
+
+    def test_refresh_rebrowses_the_current_uri(self):
+        v = self._volumio()
+        v._refresh_current_browse("favourites")
+        assert v._refresh_browse is True
+        v.get_sources.assert_called_once_with("favourites")
+
+    def test_refreshed_push_replaces_menu_without_history(self):
+        v = self._volumio()
+        v._refresh_browse = True
+        v._on_push_browse_library(self._BROWSE_PUSH)
+        item = v.menuManagerQ.get_nowait()
+        assert item["remember"] is False
+        assert v._refresh_browse is False  # one-shot flag
+
+    def test_normal_push_is_remembered(self):
+        v = self._volumio()
+        v._on_push_browse_library(self._BROWSE_PUSH)
+        item = v.menuManagerQ.get_nowait()
+        assert item["remember"] is True
