@@ -6,17 +6,11 @@
 python-engineio==3.14.2
 python-socketio[client]>=4,<5
 
-# GPIO / SPI hardware access
+# GPIO / SPI hardware access. The MCP3008 button ADC is read directly via
+# bitbanged GPIO or spidev (see includes/controls.py) - no Adafruit stack needed.
 RPi.GPIO
 pigpio
 spidev
-
-# Adafruit MCP3xxx ADC stack (button matrix reading)
-adafruit-blinka
-Adafruit-PlatformDetect
-adafruit-python-shell
-adafruit-circuitpython-mcp3xxx
-adafruit-circuitpython-bitbangio
 
 # REST API server
 fastapi

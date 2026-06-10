@@ -14,9 +14,10 @@ VENV_DIR="/data/teac-dab-controls/venv"
 
 echo "Installing teac-dab-controls Dependencies"
 apt-get update
-# System packages: build tooling for the native python wheels, the pigpio
-# daemon, and python venv support.
-apt-get -y install pigpio python3-dev python3-pip python3-venv
+# System packages: the pigpio daemon, headers for building the native python
+# wheels (RPi.GPIO/spidev/pigpio), and venv support. python3-pip is not needed:
+# the venv bootstraps its own pip via ensurepip (provided by python3-venv).
+apt-get -y install pigpio python3-dev python3-venv
 
 # Create an isolated virtual environment for the plugin so its python
 # dependencies never clash with the system / other plugins.
