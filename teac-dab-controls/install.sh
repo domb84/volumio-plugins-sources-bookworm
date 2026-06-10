@@ -1,10 +1,5 @@
 #!/bin/bash
-set -e
-
-# Abort loudly if any step fails, so the install does not silently leave a
-# broken service behind. Volumio runs this with `sh` (dash), so use a POSIX
-# EXIT trap rather than the bash-only ERR trap.
-trap 'rc=$?; [ "$rc" -ne 0 ] && echo "ERROR: teac-dab-controls install failed (exit $rc)" >&2' EXIT
+set -xe
 
 # If you need to differentiate install for armhf and i386 you can get the variable like this
 #DPKG_ARCH=`dpkg --print-architecture`
