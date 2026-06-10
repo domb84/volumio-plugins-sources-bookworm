@@ -253,17 +253,18 @@ class MenuManager:
             self._pending_render_timer.cancel()
             self._pending_render_timer = None
 
-    def display_message(self, message, clear=False, static=False, autoscroll=False):
+    def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
         # clear will clear the display and not render anything after (ie for shut down)
         # static will leave the message on screen, assuming nothing renders over it immedaitely after
         # autoscroll will scroll the message then leave on screen
+        # force will bypass the duplicate/rate suppression so the message always shows
         # the default will show the message, then render the menu after 2 seconds
 
         self.messageTime = datetime.now()
         lastMessageTime = (self.messageTime - self.lastMessageTime).total_seconds()
 
         # check if message is a duplicate, or allow duplicates if last message was longer than 5 seconds ago
-        if (self.lastMessage != message and lastMessageTime > 2) or lastMessageTime > 5:
+        if force or (self.lastMessage != message and lastMessageTime > 2) or lastMessageTime > 5:
             if self.menu is not None:
                 if clear == True:
                     self.menu.message(message.upper())
@@ -378,17 +379,22 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
+        # An empty menu means we don't navigate: tell the user and stay on the
+        # current menu (display_message re-renders it after the message).
+        # Checked before remember() so the back-button history isn't polluted,
+        # and forced past the duplicate suppression because the selected item's
+        # name has usually just been displayed by resolve_item.
+        if not menu:
+            return self.display_message("Menu is empty", force=True)
+
         # save last rendered menu for back button
         if remember:
             logger.debug("Saving last menu")
             self.remember()
 
-        # clear the menu if the next menu has some items
-        if menu:
-            if self.menu is not None:
-                self.menu.items = []
-        else:
-            return self.display_message("No items in menu")
+        # clear the current menu items before building the new menu
+        if self.menu is not None:
+            self.menu.items = []
 
         # sort menu by type if it wasnt sorted already
         if menu and menu[0].get('position') is not None:
