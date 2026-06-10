@@ -6,7 +6,11 @@ set -xe
 # Then use it to differentiate your install
 
 PLUGIN_DIR="/data/plugins/user_interface/teac-dab-controls"
-VENV_DIR="${PLUGIN_DIR}/venv"
+# Keep the venv OUTSIDE the plugin directory. It is created as root during
+# install, and a root-owned subfolder inside the plugin dir prevents Volumio
+# (running as the volumio user) from removing the old folder on update, which
+# makes the update's `mv` fail with "Directory not empty".
+VENV_DIR="/data/teac-dab-controls/venv"
 
 echo "Installing teac-dab-controls Dependencies"
 apt-get update

@@ -6,7 +6,7 @@ After=volumio.service
 User=volumio
 Group=volumio
 WorkingDirectory=/data/plugins/user_interface/teac-dab-controls/
-ExecStart=/data/plugins/user_interface/teac-dab-controls/venv/bin/python3 /data/plugins/user_interface/teac-dab-controls/index.py
+ExecStart=/data/teac-dab-controls/venv/bin/python3 /data/plugins/user_interface/teac-dab-controls/index.py
 Restart=always
 RestartSec=3
 
