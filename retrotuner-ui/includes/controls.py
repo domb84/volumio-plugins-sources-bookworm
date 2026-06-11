@@ -15,9 +15,9 @@ from .utils import parse_button_config
 
 # Capture ("learn") mode: while the flag file exists the settings page is asking
 # us to report raw button readings instead of acting on them.
-CAPTURE_FLAG_PATH = "/tmp/teac-dab-controls-capture-on"
-CAPTURE_READING_PATH = "/tmp/teac-dab-controls-capture.json"
-CAPTURE_BASELINE_PATH = "/tmp/teac-dab-controls-capture-baseline.json"
+CAPTURE_FLAG_PATH = "/tmp/retrotuner-ui-capture-on"
+CAPTURE_READING_PATH = "/tmp/retrotuner-ui-capture.json"
+CAPTURE_BASELINE_PATH = "/tmp/retrotuner-ui-capture-baseline.json"
 
 @dataclass
 class ControlsConfig:

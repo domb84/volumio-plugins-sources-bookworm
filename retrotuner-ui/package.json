@@ -1,0 +1,35 @@
+{
+	"name": "retrotuner-ui",
+	"version": "3.0.0",
+	"description": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
+	"main": "index.js",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"author": "Dominic Bird",
+	"license": "ISC",
+	"repository": "https://github.com/domb84/volumio-plugins-sources-bookworm",
+	"volumio_info": {
+		"prettyName": "RetroTuner UI",
+		"icon": "fa-lightbulb-o",
+		"plugin_type": "user_interface",
+		"architectures": [
+			"amd64",
+			"armhf"
+		],
+		"os": [
+			"bookworm"
+		],
+		"details": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
+		"changelog": "Renamed project. Improved code quality and performance. Added additional controls."
+	},
+	"engines": {
+		"node": ">=20",
+		"volumio": ">=4"
+	},
+	"dependencies": {
+		"fs-extra": "^0.28.0",
+		"kew": "^0.7.0",
+		"v-conf": "^1.4.0"
+	}
+}
