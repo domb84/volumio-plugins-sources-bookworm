@@ -111,7 +111,10 @@ teacdabcontrols.prototype.getUIConfig = function() {
             uiconf.sections[4].content[8].value = self.config.get('btn_back');
             uiconf.sections[4].content[9].value = self.config.get('btn_no_press_channel1');
             uiconf.sections[4].content[10].value = self.config.get('btn_no_press_channel2');
-            uiconf.sections[4].content[11].value = self.config.get('btn_remove_favourite');
+            uiconf.sections[4].content[11].value = self.config.get('btn_pause');
+            uiconf.sections[4].content[12].value = self.config.get('btn_remove_favourite');
+            uiconf.sections[4].content[13].value = self.config.get('btn_sleep_timer');
+            uiconf.sections[4].content[14].value = self.config.get('btn_cancel_sleep_timer');
             defer.resolve(uiconf);
         })
         .fail(function () {
@@ -195,7 +198,10 @@ var CAPTURE_LABELS = {
     btn_stop: 'Stop',
     btn_info: 'Info',
     btn_favourite: 'Favourite',
+    btn_pause: 'Pause/Play',
     btn_remove_favourite: 'Remove Favourite',
+    btn_sleep_timer: 'Sleep Timer',
+    btn_cancel_sleep_timer: 'Cancel Sleep Timer',
     btn_main_menu: 'Main Menu',
     btn_back: 'Back'
 };
@@ -207,7 +213,10 @@ teacdabcontrols.prototype.captureBtnSpotify = function () { return this.startCap
 teacdabcontrols.prototype.captureBtnStop = function () { return this.startCapture('btn_stop'); };
 teacdabcontrols.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
 teacdabcontrols.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
+teacdabcontrols.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
 teacdabcontrols.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
+teacdabcontrols.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
+teacdabcontrols.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
 teacdabcontrols.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 teacdabcontrols.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 

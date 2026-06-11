@@ -183,6 +183,17 @@
           }
         },
         {
+          "id": "capture_btn_pause",
+          "element": "button",
+          "label": "Configure Pause/Play",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnPause",
+            "data": []
+          }
+        },
+        {
           "id": "capture_btn_remove_favourite",
           "element": "button",
           "label": "Configure Remove Favourite",
@@ -190,6 +201,28 @@
             "type": "controller",
             "endpoint": "user_interface/teac-dab-controls",
             "method": "captureBtnRemoveFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_sleep_timer",
+          "element": "button",
+          "label": "Configure Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnSleepTimer",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_cancel_sleep_timer",
+          "element": "button",
+          "label": "Configure Cancel Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnCancelSleepTimer",
             "data": []
           }
         },
@@ -365,7 +398,10 @@
           "btn_back",
           "btn_no_press_channel1",
           "btn_no_press_channel2",
-          "btn_remove_favourite"
+          "btn_pause",
+          "btn_remove_favourite",
+          "btn_sleep_timer",
+          "btn_cancel_sleep_timer"
         ]
       },
       "content": [
@@ -456,10 +492,34 @@
           "visibleIf": { "field": "show_advanced_values", "value": true }
         },
         {
+          "id": "btn_pause",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Pause/Play",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
           "id": "btn_remove_favourite",
           "type":"text",
           "element": "input",
           "label": "Resistance value for Remove Favourite",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_sleep_timer",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Sleep Timer",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_cancel_sleep_timer",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Cancel Sleep Timer",
           "value": "",
           "visibleIf": { "field": "show_advanced_values", "value": true }
         }

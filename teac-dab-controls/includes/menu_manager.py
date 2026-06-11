@@ -44,6 +44,7 @@ class MenuManager:
         self._suppressed_info: Optional[str] = None
         self._info_release_timer: Optional[threading.Timer] = None
         self._idle_timer: Optional[threading.Timer] = None
+        self._current_context: Optional[str] = None
 
         # init menu
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)
@@ -60,10 +61,13 @@ class MenuManager:
             'btn_enter': self.menu.processEnter,
             'btn_radio': lambda: self.volumioQ.put({'button': 'radio'}),
             'btn_stop': lambda: self.volumioQ.put({'button': 'stop'}),
+            'btn_pause': lambda: self.volumioQ.put({'button': 'toggle'}),
             'btn_info': lambda: self.volumioQ.put({'show': 'info'}),
             'btn_spotify': lambda: self.volumioQ.put({'button': 'spotify'}),
             'btn_favourite': self.add_favorite,
             'btn_remove_favourite': self.remove_favorite,
+            'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
+            'btn_cancel_sleep_timer': self._cancel_sleep_timer,
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
         }
 
@@ -95,6 +99,7 @@ class MenuManager:
                         logger.warning(f"Unknown control action: {action}")
                 elif 'menu' in queueItem:
                     if queueItem['menu']:
+                        self._current_context = queueItem.get('context')
                         self.build_menu(queueItem['menu'],queueItem.get('remember', True))
                 elif 'info' in queueItem:
                     # An explicitly requested info update (info button) must show
@@ -117,6 +122,8 @@ class MenuManager:
                     previous = self.go_back()
                     if previous:
                         self.build_menu(previous, remember=False)
+                elif 'pop_history' in queueItem:
+                    self.go_back()  # discard stale history entry without rendering it
                 elif 'message' in queueItem:
                     self.show_message(queueItem['message'],
                                       force=queueItem.get('force', False),
@@ -194,6 +201,14 @@ class MenuManager:
         if favourite is not None:
             self.volumioQ.put({'remove_favourite': favourite})
 
+    def _cancel_sleep_timer(self) -> None:
+        if self._current_context == 'config':
+            # Already in the config menu — cancel and rebuild it in place so the
+            # label updates immediately without needing to navigate away and back.
+            self.volumioQ.put({'button': 'system://sleep/cancel/refresh_config'})
+        else:
+            # Elsewhere — cancel and show a confirmation message.
+            self.volumioQ.put({'button': 'system://sleep/cancel/direct'})
 
     def _defer_info(self, info: str) -> None:
         """Hold a track-info update until scroll activity has been idle for _SCROLL_IDLE_SECONDS."""
@@ -319,37 +334,25 @@ class MenuManager:
     def show_track_info(self, payload: str) -> None:
         try:
 
-            statusSymbols = {'play':'Now playing','stop':'Stopped','pause':'Paused'}
+            statusSymbols = {'play': '>', 'stop': '[]', 'pause': '||'}
 
             logger.debug("Track info args: %s", payload)
             input_data = json.loads(payload)
 
             for i in input_data:
                 logger.debug("Track info input: %s", i)
-                
-                if i['status'] in statusSymbols:
-                    status = statusSymbols[i['status']]
-                else:
-                    status = i['status']
-                artist = i['artist']
-                title = i['title']
-                album = i['album']
-                bitrate = i['bitrate']
-                samplerate = i['samplerate']
+
+                symbol   = statusSymbols.get(i['status'], i['status'])
+                artist   = i['artist']
+                title    = i['title']
+                album    = i['album']
+                bitrate  = i['bitrate']
                 bitdepth = i['bitdepth']
-                channels = i['channels']
 
-                tech_info_list = [status, bitrate, samplerate, bitdepth, channels]
-                # only join items with a status that isn't None
-                tech_info_filtered = ': '.join(str(item) for item in tech_info_list if item is not None)
-                tech_info = f"({tech_info_filtered})"
-
-                first_line_list = [title, artist]
-                second_line_list = [album, tech_info]
-
-                # only join items with a status that isn't None
-                first_line = ': '.join(str(item) for item in first_line_list if item is not None)
-                second_line = ' '.join(str(item) for item in second_line_list if item is not None)
+                track       = '/'.join(str(x) for x in [title, artist] if x is not None)
+                first_line  = f"{symbol} {track}" if track else symbol
+                quality     = '/'.join(str(x) for x in [bitrate, bitdepth] if x is not None)
+                second_line = '/'.join(x for x in [album, quality] if x)
 
                 message = f"{first_line}\n{second_line}"
                 self.display_message(message, autoscroll=True)
