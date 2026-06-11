@@ -11,7 +11,7 @@
 	"repository": "https://github.com/domb84/volumio-plugins-sources-bookworm",
 	"volumio_info": {
 		"prettyName": "RetroTuner UI",
-		"icon": "fa-lightbulb-o",
+		"icon": "fa-cog-o",
 		"plugin_type": "user_interface",
 		"architectures": [
 			"amd64",
@@ -28,8 +28,8 @@
 		"volumio": ">=4"
 	},
 	"dependencies": {
-		"fs-extra": "^0.28.0",
+		"fs-extra": "^11.3.5",
 		"kew": "^0.7.0",
-		"v-conf": "^1.4.0"
+		"v-conf": "^1.4.3"
 	}
 }

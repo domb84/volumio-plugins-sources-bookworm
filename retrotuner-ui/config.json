@@ -85,7 +85,7 @@
     },
     "btn_spotify": {
         "type": "text",
-        "value": "0, 20"
+        "value": ""
     },
     "btn_pause": {
         "type": "text",
@@ -121,7 +121,7 @@
     },
     "btn_dimmer": {
         "type": "text",
-        "value": "0, 20"
+        "value": "0, 21"
     },
     "btn_no_press_channel1": {
         "type": "text",

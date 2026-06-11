@@ -167,11 +167,13 @@ retrotunerui.prototype.saveOptions = function (data) {
         }
     }
     
+    self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    self.logger.info('RetroTuner UI - settings saved');
-    self.logger.info('RetroTuner UI - restarting services');
-    self.onRestart()
+    if (self._checkButtonConflicts()) {
+        self.logger.info('RetroTuner UI - restarting services');
+        self.onRestart();
+    }
 
     return libQ.resolve();
 };
@@ -206,6 +208,34 @@ var CAPTURE_LABELS = {
     btn_back: 'Back'
 };
 
+// Conflict detection helpers ---------------------------------------------------
+
+function parseButtonMapping(str) {
+    if (!str) return null;
+    const commaIdx = str.indexOf(',');
+    if (commaIdx === -1) return null;
+    const channel = parseInt(str.slice(0, commaIdx).trim(), 10);
+    const valuePart = str.slice(commaIdx + 1).trim();
+    if (isNaN(channel) || !valuePart) return null;
+    if (valuePart.includes('-')) {
+        const parts = valuePart.split('-').map(function (s) { return parseInt(s.trim(), 10); });
+        if (parts.some(isNaN)) return null;
+        return { channel: channel, type: 'range', low: Math.min.apply(null, parts), high: Math.max.apply(null, parts) };
+    }
+    const value = parseInt(valuePart, 10);
+    if (isNaN(value)) return null;
+    return { channel: channel, type: 'value', value: value };
+}
+
+function mappingsOverlap(a, b) {
+    if (a.channel !== b.channel) return false;
+    if (a.type === 'value' && b.type === 'value') return a.value === b.value;
+    if (a.type === 'range' && b.type === 'range') return a.low <= b.high && b.low <= a.high;
+    const point = a.type === 'value' ? a.value : b.value;
+    const range  = a.type === 'range'  ? a       : b;
+    return point >= range.low && point <= range.high;
+}
+
 // One entry point per button (UIConfig button onClick targets these by name)
 retrotunerui.prototype.captureBtnEnter = function () { return this.startCapture('btn_enter'); };
 retrotunerui.prototype.captureBtnRadio = function () { return this.startCapture('btn_radio'); };
@@ -219,6 +249,38 @@ retrotunerui.prototype.captureBtnCancelSleepTimer = function () { return this.st
 retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
+
+// Clear entry points — one per button, same pattern as capture entry points
+retrotunerui.prototype.clearBtnEnter             = function () { return this.clearButton('btn_enter'); };
+retrotunerui.prototype.clearBtnRadio             = function () { return this.clearButton('btn_radio'); };
+retrotunerui.prototype.clearBtnSpotify           = function () { return this.clearButton('btn_spotify'); };
+retrotunerui.prototype.clearBtnInfo              = function () { return this.clearButton('btn_info'); };
+retrotunerui.prototype.clearBtnFavourite         = function () { return this.clearButton('btn_favourite'); };
+retrotunerui.prototype.clearBtnPause             = function () { return this.clearButton('btn_pause'); };
+retrotunerui.prototype.clearBtnRemoveFavourite   = function () { return this.clearButton('btn_remove_favourite'); };
+retrotunerui.prototype.clearBtnSleepTimer        = function () { return this.clearButton('btn_sleep_timer'); };
+retrotunerui.prototype.clearBtnCancelSleepTimer  = function () { return this.clearButton('btn_cancel_sleep_timer'); };
+retrotunerui.prototype.clearBtnMainMenu          = function () { return this.clearButton('btn_main_menu'); };
+retrotunerui.prototype.clearBtnBack              = function () { return this.clearButton('btn_back'); };
+retrotunerui.prototype.clearBtnDimmer            = function () { return this.clearButton('btn_dimmer'); };
+
+retrotunerui.prototype.clearButton = function (key) {
+    const self = this;
+    const label = CAPTURE_LABELS[key];
+    if (!label) {
+        self.logger.error('RetroTuner UI - clearButton: unknown key ' + key);
+        return libQ.resolve();
+    }
+    self.config.set(key, '');
+    // Remove from any in-progress capture session so saveCapture won't re-apply it.
+    if (self._capturedValues && label in self._capturedValues) {
+        delete self._capturedValues[label];
+    }
+    self.logger.info('RetroTuner UI - cleared mapping for ' + label);
+    self.commandRouter.pushToastMessage('success', 'RetroTuner UI',
+        '"' + label + '" cleared. Click "Save & Restart Controls" to apply.');
+    return libQ.resolve();
+};
 
 // Begin a capture session if one isn't already running. The session keeps
 // the controls paused (via the flag file) until the user saves or goes
@@ -401,12 +463,45 @@ retrotunerui.prototype.saveCapture = function () {
     }
 
     const summary = labels.map(function (label) { return label + ' = ' + captured[label]; }).join(', ');
+    self._capturedValues = {};
+
+    if (!self._checkButtonConflicts()) {
+        self.commandRouter.pushToastMessage('info', 'Button Capture',
+            'Values saved (' + summary + ') but restart blocked — fix the conflict above first.');
+        return libQ.resolve();
+    }
+
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Saved (' + summary + '). Restarting controls...');
-
-    self._capturedValues = {};
     self.onRestart();
     return libQ.resolve();
+};
+
+// Returns true if no conflicts exist; false and fires an error toast if any are found.
+retrotunerui.prototype._checkButtonConflicts = function () {
+    const self = this;
+    const mappings = Object.keys(CAPTURE_LABELS)
+        .map(function (key) {
+            return { label: CAPTURE_LABELS[key], parsed: parseButtonMapping(self.config.get(key)) };
+        })
+        .filter(function (m) { return m.parsed !== null; });
+
+    const conflicts = [];
+    for (let i = 0; i < mappings.length; i++) {
+        for (let j = i + 1; j < mappings.length; j++) {
+            if (mappingsOverlap(mappings[i].parsed, mappings[j].parsed)) {
+                conflicts.push('"' + mappings[i].label + '" and "' + mappings[j].label + '"');
+            }
+        }
+    }
+
+    if (conflicts.length > 0) {
+        self.logger.error('RetroTuner UI - button conflicts detected: ' + conflicts.join('; '));
+        self.commandRouter.pushToastMessage('error', 'RetroTuner UI',
+            'Button conflict: ' + conflicts.join('; ') + '. Restart blocked — please remap before saving.');
+        return false;
+    }
+    return true;
 };
 
 // Plugin methods -----------------------------------------------------------------------------
