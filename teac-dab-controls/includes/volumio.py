@@ -140,6 +140,11 @@ class Volumio:
             logger.debug("%s", button)
             return
 
+        if button == 'stop_and_clear':
+            self.stop()
+            logger.debug("%s", button)
+            return
+
         if button == 'toggle':
             self._send('toggle')
             logger.debug("%s", button)

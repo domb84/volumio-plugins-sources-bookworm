@@ -3,7 +3,9 @@
 The class does I/O and runs blocking loops in __init__, so instances are built
 with __new__ and only the attributes a given method needs are set.
 """
-from unittest.mock import Mock
+import queue
+import time
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -111,3 +113,142 @@ class TestCaptureReading:
         c._handle_capture_reading(1, 16)   # ch1 baseline
         c._handle_capture_reading(1, 20)   # ch1 press -> seq 1
         c._publish_capture_reading.assert_called_once_with(1, 20, 1)
+
+
+class TestProcessReadings:
+    """Short-press fires on release; long-press fires after threshold."""
+
+    CHANNEL = 0
+    SKIP_VALUE = 16   # resting / no-press
+    BTN_VALUE = 12    # the press value
+
+    def _controls(self):
+        c = Controls.__new__(Controls)
+        c.controlQ = queue.Queue()
+        return c
+
+    def _make_states(self, initial_value=None):
+        """States pre-primed so the debounce gate is always open."""
+        return {
+            self.CHANNEL: {
+                "last_value": initial_value,
+                "stable_since": 0.0,
+                "last_sent": 0.0,
+                "btn_state": "idle",
+                "press_action": None,
+                "press_start": None,
+                "long_press_fired": False,
+            }
+        }
+
+    def _parsed_btns(self):
+        return [("btn_pause", self.CHANNEL, ("value", self.BTN_VALUE))]
+
+    def _parsed_skips(self):
+        return [("rest", self.CHANNEL, ("value", self.SKIP_VALUE))]
+
+    def _call(self, c, states, data, debounce=0.0, cooldown=0.0, threshold=1.0):
+        # Pre-prime last_value so the debounce gate (`data == last_value`) passes
+        # on every call regardless of the previous value. Also patch normalize_value
+        # to identity so our small test values aren't remapped to different numbers.
+        states[self.CHANNEL]["last_value"] = data
+        with patch.object(c, 'normalize_value', side_effect=lambda v, *_: v):
+            c._process_readings(
+                [data], [self.CHANNEL], states,
+                self._parsed_btns(), self._parsed_skips(),
+                button_debounce_rate=debounce,
+                button_cooldown_rate=cooldown,
+                long_press_threshold=threshold,
+            )
+
+    # --- press state transitions ---
+
+    def test_press_does_not_fire_immediately(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)
+        assert c.controlQ.empty()
+        assert states[self.CHANNEL]["btn_state"] == "pressed"
+        assert states[self.CHANNEL]["press_action"] == "btn_pause"
+
+    def test_short_press_fires_on_release(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)          # press
+        self._call(c, states, self.SKIP_VALUE)         # release
+        assert c.controlQ.get_nowait() == {"control": "btn_pause"}
+        assert states[self.CHANNEL]["btn_state"] == "idle"
+
+    def test_held_press_does_not_fire_short_before_threshold(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)          # press
+        self._call(c, states, self.BTN_VALUE)          # still held, under threshold
+        assert c.controlQ.empty()
+
+    # --- long press ---
+
+    def test_long_press_fires_action_long_after_threshold(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)          # press -> state = pressed
+        states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0  # exceed threshold
+        self._call(c, states, self.BTN_VALUE)          # still held
+        assert c.controlQ.get_nowait() == {"control": "btn_pause_long"}
+        assert states[self.CHANNEL]["long_press_fired"] is True
+
+    def test_long_press_fires_only_once_while_held(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)
+        states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
+        self._call(c, states, self.BTN_VALUE)          # long press fires
+        self._call(c, states, self.BTN_VALUE)          # still held — no second fire
+        assert c.controlQ.qsize() == 1
+
+    def test_short_press_not_fired_after_long_press(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE)
+        states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
+        self._call(c, states, self.BTN_VALUE)          # long press fires
+        c.controlQ.get_nowait()                        # consume long press event
+        self._call(c, states, self.SKIP_VALUE)         # release
+        assert c.controlQ.empty()
+
+    def test_no_long_press_when_threshold_is_none(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        self._call(c, states, self.BTN_VALUE, threshold=None)
+        states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
+        self._call(c, states, self.BTN_VALUE, threshold=None)  # held past threshold
+        assert c.controlQ.empty()                      # no long press
+        # but short press still fires on release
+        self._call(c, states, self.SKIP_VALUE, threshold=None)
+        assert c.controlQ.get_nowait() == {"control": "btn_pause"}
+
+    # --- cooldown ---
+
+    def test_cooldown_suppresses_short_press_on_release(self):
+        c = self._controls()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        states[self.CHANNEL]["last_sent"] = time.monotonic()   # sent very recently
+        self._call(c, states, self.BTN_VALUE)
+        self._call(c, states, self.SKIP_VALUE, cooldown=60.0)  # very long cooldown
+        assert c.controlQ.empty()
+
+    # --- capture mode suppresses normal actions ---
+
+    def test_capture_mode_suppresses_short_press(self):
+        c = self._controls()
+        c._handle_capture_reading = Mock()
+        states = self._make_states(initial_value=self.BTN_VALUE)
+        with patch.object(c, 'normalize_value', side_effect=lambda v, *_: v):
+            c._process_readings(
+                [self.BTN_VALUE], [self.CHANNEL], states,
+                self._parsed_btns(), self._parsed_skips(),
+                button_debounce_rate=0.0, button_cooldown_rate=0.0,
+                long_press_threshold=1.0, capture=True,
+            )
+        assert c.controlQ.empty()
+        c._handle_capture_reading.assert_called_once_with(self.CHANNEL, self.BTN_VALUE)

@@ -87,10 +87,6 @@
         "type": "text",
         "value": "0, 12"
     },
-    "btn_stop": {
-        "type": "text",
-        "value": "0, 31-32"
-    },
     "btn_pause": {
         "type": "text",
         "value": ""

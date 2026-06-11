@@ -20,7 +20,7 @@ _MENU_IDLE_SECONDS = 30.0
 # restart (capture/settings save) apart from a genuine stop/shutdown.
 _RESTART_MARKER_PATH = "/tmp/teac-dab-controls-restarting"
 
-from rpilcdmenu import RpiLCDMenu
+from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
 class MenuManager:
@@ -48,6 +48,8 @@ class MenuManager:
 
         # init menu
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)
+        self._display = DisplayController()
+        self._display.on()
         self.menu.message(('Initialising...').upper(), autoscroll=True)
 
         # render main menu
@@ -60,14 +62,15 @@ class MenuManager:
             'btn_main_menu': lambda: self.volumioQ.put({'button': 'menu'}),
             'btn_enter': self.menu.processEnter,
             'btn_radio': lambda: self.volumioQ.put({'button': 'radio'}),
-            'btn_stop': lambda: self.volumioQ.put({'button': 'stop'}),
             'btn_pause': lambda: self.volumioQ.put({'button': 'toggle'}),
+            'btn_pause_long': lambda: self.volumioQ.put({'button': 'stop_and_clear'}),
             'btn_info': lambda: self.volumioQ.put({'show': 'info'}),
             'btn_spotify': lambda: self.volumioQ.put({'button': 'spotify'}),
             'btn_favourite': self.add_favorite,
             'btn_remove_favourite': self.remove_favorite,
             'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
             'btn_cancel_sleep_timer': self._cancel_sleep_timer,
+            'btn_dimmer': lambda: self._display.toggle(),
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
         }
 

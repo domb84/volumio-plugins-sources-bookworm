@@ -36,6 +36,7 @@ class ControlsConfig:
     button_poll_rate: int = 10
     button_debounce_rate: int = 50
     button_cooldown_rate: int = 500
+    long_press_threshold: float = 1.0
 
 class Controls:
     """Handle rotary encoder and MCP3008 button inputs.
@@ -172,7 +173,7 @@ class Controls:
             logger.debug("Could not publish capture reading: %s", e)
 
     def _process_readings(self, batch_data, channels, button_states, parsed_btns, parsed_skips,
-                          button_debounce_rate, button_cooldown_rate, capture=False):
+                          button_debounce_rate, button_cooldown_rate, long_press_threshold=None, capture=False):
         """Apply debounce/cooldown to a batch of ADC readings and emit button actions.
 
         In capture mode each distinct stable reading is published for the
@@ -191,17 +192,52 @@ class Controls:
                 if capture:
                     self._handle_capture_reading(channel, data)
                     continue
-                if now - state["last_sent"] < button_cooldown_rate:
-                    continue
-                logger.debug(f"Channel {channel} stable value: {data}")
+
                 skipped, action = self._lookup_button(channel, data, parsed_btns, parsed_skips)
+
                 if skipped:
+                    # Value is in a skip range — treat as "released"
+                    if state["btn_state"] == "pressed" and not state["long_press_fired"]:
+                        short_action = state["press_action"]
+                        if short_action and now - state["last_sent"] >= button_cooldown_rate:
+                            logger.debug(f"Channel {channel} short press: {short_action}")
+                            self.controlQ.put({'control': short_action})
+                            state["last_sent"] = now
+                    state["btn_state"] = "idle"
+                    state["press_action"] = None
+                    state["press_start"] = None
+                    state["long_press_fired"] = False
                     continue
+
                 if action:
-                    self.controlQ.put({'control': action})
-                    state["last_sent"] = now
+                    if state["btn_state"] == "idle":
+                        state["btn_state"] = "pressed"
+                        state["press_action"] = action
+                        state["press_start"] = now
+                        state["long_press_fired"] = False
+                        logger.debug(f"Channel {channel} press start: {action}")
+                    elif state["btn_state"] == "pressed" and long_press_threshold is not None:
+                        if not state["long_press_fired"] and now - (state["press_start"] or now) >= long_press_threshold:
+                            long_action = action + "_long"
+                            logger.debug(f"Channel {channel} long press: {long_action}")
+                            self.controlQ.put({'control': long_action})
+                            state["long_press_fired"] = True
+                            state["last_sent"] = now
                 else:
-                    logger.warning(f"Uncaught press on Channel {channel}: {data}")
+                    # No matching action (unrecognised value) — treat as released if was pressed
+                    if state["btn_state"] == "pressed":
+                        if not state["long_press_fired"] and now - state["last_sent"] >= button_cooldown_rate:
+                            short_action = state["press_action"]
+                            if short_action:
+                                logger.warning(f"Uncaught press on Channel {channel}: {data} (releasing {short_action})")
+                        else:
+                            logger.warning(f"Uncaught press on Channel {channel}: {data}")
+                        state["btn_state"] = "idle"
+                        state["press_action"] = None
+                        state["press_start"] = None
+                        state["long_press_fired"] = False
+                    else:
+                        logger.warning(f"Uncaught press on Channel {channel}: {data}")
 
     def rotary_encoder(self, encA, encB):
         Enc_A = encA
@@ -261,7 +297,8 @@ class Controls:
         logger.info("Bitbanged controls polling every %.3fs", button_poll_rate)
 
         button_states = {
-            channel: {"last_value": None, "stable_since": None, "last_sent": 0.0}
+            channel: {"last_value": None, "stable_since": None, "last_sent": 0.0,
+                      "btn_state": "idle", "press_action": None, "press_start": None, "long_press_fired": False}
             for channel in channels
         }
 
@@ -301,6 +338,7 @@ class Controls:
 
             self._process_readings(batch_data, channels, button_states, parsed_btns, parsed_skips,
                                    button_debounce_rate, button_cooldown_rate,
+                                   long_press_threshold=self.config.long_press_threshold,
                                    capture=self._refresh_capture_state())
 
             time.sleep(button_poll_rate)
@@ -324,7 +362,8 @@ class Controls:
         logger.info("SPI controls polling every %.3fs", button_poll_rate)
 
         button_states = {
-            channel: {"last_value": None, "stable_since": None, "last_sent": 0.0}
+            channel: {"last_value": None, "stable_since": None, "last_sent": 0.0,
+                      "btn_state": "idle", "press_action": None, "press_start": None, "long_press_fired": False}
             for channel in channels
         }
 
@@ -348,6 +387,7 @@ class Controls:
 
             self._process_readings(batch_data, channels, button_states, parsed_btns, parsed_skips,
                                    button_debounce_rate, button_cooldown_rate,
+                                   long_press_threshold=self.config.long_press_threshold,
                                    capture=self._refresh_capture_state())
 
             time.sleep(button_poll_rate)

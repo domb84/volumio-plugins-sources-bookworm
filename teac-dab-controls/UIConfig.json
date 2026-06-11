@@ -150,17 +150,6 @@
           }
         },
         {
-          "id": "capture_btn_stop",
-          "element": "button",
-          "label": "Configure Stop",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
-            "method": "captureBtnStop",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_info",
           "element": "button",
           "label": "Configure Info",
@@ -245,6 +234,17 @@
             "type": "controller",
             "endpoint": "user_interface/teac-dab-controls",
             "method": "captureBtnBack",
+            "data": []
+          }
+        },
+        {
+          "id": "capture_btn_dimmer",
+          "element": "button",
+          "label": "Configure Dimmer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/teac-dab-controls",
+            "method": "captureBtnDimmer",
             "data": []
           }
         },
@@ -391,7 +391,6 @@
           "btn_enter",
           "btn_radio",
           "btn_spotify",
-          "btn_stop",
           "btn_info",
           "btn_favourite",
           "btn_main_menu",
@@ -401,7 +400,8 @@
           "btn_pause",
           "btn_remove_favourite",
           "btn_sleep_timer",
-          "btn_cancel_sleep_timer"
+          "btn_cancel_sleep_timer",
+          "btn_dimmer"
         ]
       },
       "content": [
@@ -432,14 +432,6 @@
           "type":"text",
           "element": "input",
           "label": "Resistance value for Spotify",
-          "value": "",
-          "visibleIf": { "field": "show_advanced_values", "value": true }
-        },
-        {
-          "id": "btn_stop",
-          "type":"text",
-          "element": "input",
-          "label": "Resistance value for Stop",
           "value": "",
           "visibleIf": { "field": "show_advanced_values", "value": true }
         },
@@ -520,6 +512,14 @@
           "type":"text",
           "element": "input",
           "label": "Resistance value for Cancel Sleep Timer",
+          "value": "",
+          "visibleIf": { "field": "show_advanced_values", "value": true }
+        },
+        {
+          "id": "btn_dimmer",
+          "type":"text",
+          "element": "input",
+          "label": "Resistance value for Dimmer (display on/off)",
           "value": "",
           "visibleIf": { "field": "show_advanced_values", "value": true }
         }
