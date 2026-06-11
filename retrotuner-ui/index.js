@@ -278,7 +278,16 @@ retrotunerui.prototype.clearButton = function (key) {
     }
     self.logger.info('RetroTuner UI - cleared mapping for ' + label);
     self.commandRouter.pushToastMessage('success', 'RetroTuner UI',
-        '"' + label + '" cleared. Click "Save & Restart Controls" to apply.');
+        '"' + label + '" cleared. Click "Apply & Restart" to activate.');
+    return libQ.resolve();
+};
+
+retrotunerui.prototype.restartControls = function () {
+    const self = this;
+    if (self._checkButtonConflicts()) {
+        self.commandRouter.pushToastMessage('info', 'RetroTuner UI', 'Restarting controls...');
+        self.onRestart();
+    }
     return libQ.resolve();
 };
 

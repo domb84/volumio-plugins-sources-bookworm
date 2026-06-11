@@ -128,17 +128,6 @@
           }
         },
         {
-          "id": "clear_btn_enter",
-          "element": "button",
-          "label": "Clear Enter",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnEnter",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_radio",
           "element": "button",
           "label": "Configure Radio",
@@ -146,17 +135,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnRadio",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_radio",
-          "element": "button",
-          "label": "Clear Radio",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnRadio",
             "data": []
           }
         },
@@ -172,17 +150,6 @@
           }
         },
         {
-          "id": "clear_btn_spotify",
-          "element": "button",
-          "label": "Clear Spotify",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnSpotify",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_info",
           "element": "button",
           "label": "Configure Info",
@@ -190,17 +157,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnInfo",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_info",
-          "element": "button",
-          "label": "Clear Info",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnInfo",
             "data": []
           }
         },
@@ -216,17 +172,6 @@
           }
         },
         {
-          "id": "clear_btn_favourite",
-          "element": "button",
-          "label": "Clear Favourite",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnFavourite",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_pause",
           "element": "button",
           "label": "Configure Pause/Play",
@@ -234,17 +179,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnPause",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_pause",
-          "element": "button",
-          "label": "Clear Pause/Play",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnPause",
             "data": []
           }
         },
@@ -260,17 +194,6 @@
           }
         },
         {
-          "id": "clear_btn_remove_favourite",
-          "element": "button",
-          "label": "Clear Remove Favourite",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnRemoveFavourite",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_sleep_timer",
           "element": "button",
           "label": "Configure Sleep Timer",
@@ -278,17 +201,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnSleepTimer",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_sleep_timer",
-          "element": "button",
-          "label": "Clear Sleep Timer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnSleepTimer",
             "data": []
           }
         },
@@ -304,17 +216,6 @@
           }
         },
         {
-          "id": "clear_btn_cancel_sleep_timer",
-          "element": "button",
-          "label": "Clear Cancel Sleep Timer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnCancelSleepTimer",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_main_menu",
           "element": "button",
           "label": "Configure Main Menu",
@@ -322,17 +223,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnMainMenu",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_main_menu",
-          "element": "button",
-          "label": "Clear Main Menu",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnMainMenu",
             "data": []
           }
         },
@@ -348,17 +238,6 @@
           }
         },
         {
-          "id": "clear_btn_back",
-          "element": "button",
-          "label": "Clear Back",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnBack",
-            "data": []
-          }
-        },
-        {
           "id": "capture_btn_dimmer",
           "element": "button",
           "label": "Configure Dimmer",
@@ -366,17 +245,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnDimmer",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_dimmer",
-          "element": "button",
-          "label": "Clear Dimmer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnDimmer",
             "data": []
           }
         },
@@ -399,6 +267,158 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "saveCapture",
+            "data": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "button_clear",
+      "element": "section",
+      "label": "Clear Button Mappings",
+      "icon": "fa-times-circle",
+      "description": "Remove a button's mapping to disable it or free it up for remapping to something else. Clearing a button does not restart the controls — click 'Apply & Restart' at the bottom of this section once you are done.",
+      "content": [
+        {
+          "id": "clear_btn_enter",
+          "element": "button",
+          "label": "Clear Enter",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnEnter",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_radio",
+          "element": "button",
+          "label": "Clear Radio",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnRadio",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_spotify",
+          "element": "button",
+          "label": "Clear Spotify",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnSpotify",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_info",
+          "element": "button",
+          "label": "Clear Info",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnInfo",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_favourite",
+          "element": "button",
+          "label": "Clear Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_pause",
+          "element": "button",
+          "label": "Clear Pause/Play",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnPause",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_remove_favourite",
+          "element": "button",
+          "label": "Clear Remove Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnRemoveFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_sleep_timer",
+          "element": "button",
+          "label": "Clear Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnSleepTimer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_cancel_sleep_timer",
+          "element": "button",
+          "label": "Clear Cancel Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnCancelSleepTimer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_main_menu",
+          "element": "button",
+          "label": "Clear Main Menu",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnMainMenu",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_back",
+          "element": "button",
+          "label": "Clear Back",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnBack",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_dimmer",
+          "element": "button",
+          "label": "Clear Dimmer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnDimmer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_restart",
+          "element": "button",
+          "label": "Apply & Restart",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "restartControls",
             "data": []
           }
         }
