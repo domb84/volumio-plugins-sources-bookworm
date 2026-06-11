@@ -87,9 +87,9 @@
         "type": "text",
         "value": "0, 12"
     },
-    "btn_stop": {
+    "btn_pause": {
         "type": "text",
-        "value": "0, 31-32"
+        "value": ""
     },
     "btn_info": {
         "type": "text",
@@ -102,6 +102,14 @@
     "btn_remove_favourite": {
         "type": "text",
         "value": "7, 28"
+    },
+    "btn_sleep_timer": {
+        "type": "text",
+        "value": ""
+    },
+    "btn_cancel_sleep_timer": {
+        "type": "text",
+        "value": ""
     },
     "btn_main_menu": {
         "type": "text",

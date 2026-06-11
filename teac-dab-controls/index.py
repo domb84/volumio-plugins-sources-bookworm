@@ -45,15 +45,22 @@ def load_button_config(config_data: Dict[str, Any]) -> Dict[str, Tuple[str, ...]
         "btn_enter": parse_button_mapping(config_data["btn_enter"]["value"]),
         "btn_radio": parse_button_mapping(config_data["btn_radio"]["value"]),
         "btn_spotify": parse_button_mapping(config_data["btn_spotify"]["value"]),
-        "btn_stop": parse_button_mapping(config_data["btn_stop"]["value"]),
         "btn_info": parse_button_mapping(config_data["btn_info"]["value"]),
         "btn_favourite": parse_button_mapping(config_data["btn_favourite"]["value"]),
         "btn_main_menu": parse_button_mapping(config_data["btn_main_menu"]["value"]),
         "btn_back": parse_button_mapping(config_data["btn_back"]["value"]),
     }
     # Optional so existing configs without the key keep working.
+    if "btn_pause" in config_data and config_data["btn_pause"].get("value"):
+        config["btn_pause"] = parse_button_mapping(config_data["btn_pause"]["value"])
     if "btn_remove_favourite" in config_data:
         config["btn_remove_favourite"] = parse_button_mapping(config_data["btn_remove_favourite"]["value"])
+    if "btn_sleep_timer" in config_data and config_data["btn_sleep_timer"].get("value"):
+        config["btn_sleep_timer"] = parse_button_mapping(config_data["btn_sleep_timer"]["value"])
+    if "btn_cancel_sleep_timer" in config_data and config_data["btn_cancel_sleep_timer"].get("value"):
+        config["btn_cancel_sleep_timer"] = parse_button_mapping(config_data["btn_cancel_sleep_timer"]["value"])
+    if "btn_dimmer" in config_data and config_data["btn_dimmer"].get("value"):
+        config["btn_dimmer"] = parse_button_mapping(config_data["btn_dimmer"]["value"])
     return config
 
 

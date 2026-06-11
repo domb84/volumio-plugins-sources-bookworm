@@ -169,6 +169,7 @@ class TestBrowseRefreshAfterRemoval:
         v.menuManagerQ = queue.Queue()
         v._last_browse_uri = None
         v._refresh_browse = False
+        v._refresh_timer = None
         v.get_sources = Mock()
         return v
 
@@ -196,3 +197,29 @@ class TestBrowseRefreshAfterRemoval:
         v._on_push_browse_library(self._BROWSE_PUSH)
         item = v.menuManagerQ.get_nowait()
         assert item["remember"] is True
+
+
+class TestButtonRouting:
+    """_process_button_item routes named actions to the correct handler."""
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v.stop = Mock()
+        return v
+
+    def test_stop_calls_stop(self):
+        v = self._volumio()
+        v._process_button_item('stop')
+        v.stop.assert_called_once()
+
+    def test_stop_and_clear_calls_stop(self):
+        """Long-press pause: stop + clear queue via the same stop() method."""
+        v = self._volumio()
+        v._process_button_item('stop_and_clear')
+        v.stop.assert_called_once()
+
+    def test_stop_and_stop_and_clear_are_independent_calls(self):
+        v = self._volumio()
+        v._process_button_item('stop')
+        v._process_button_item('stop_and_clear')
+        assert v.stop.call_count == 2

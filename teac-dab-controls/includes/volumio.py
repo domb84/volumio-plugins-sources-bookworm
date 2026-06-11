@@ -19,6 +19,7 @@ logging.getLogger('socketio').setLevel(logging.WARNING)
 import json
 import socketio
 import re
+from datetime import datetime, timedelta
 from retrying import retry
 
 class Volumio:
@@ -42,6 +43,7 @@ class Volumio:
         self._last_browse_uri = None    # uri of the list currently on screen (for post-removal refresh)
         self._refresh_browse = False    # next pushBrowseLibrary replaces the menu without history
         self._refresh_timer = None      # pending post-removal refresh timer
+        self._sleep_end_time = None     # datetime when sleep timer fires, or None if inactive
 
         self.ws_api = "http://localhost:3000"
         self.sio = socketio.Client(logger=False, engineio_logger=False,reconnection=True)
@@ -62,6 +64,10 @@ class Volumio:
         self.sio.on('urifavourites', self._on_response)
         self.sio.on('pushBrowseSources', self._on_push_browse_sources)
         self.sio.on('pushInfoNetwork', self._on_push_info_network)
+        self.sio.on('pushSleep', self._on_push_sleep)
+
+        # Sync sleep timer state with Volumio on startup
+        self._send('getSleep')
 
         # Process incoming requests from the volumioQ using blocking get
         while not (self.stop_event and self.stop_event.is_set()):
@@ -134,19 +140,23 @@ class Volumio:
             logger.debug("%s", button)
             return
 
+        if button == 'stop_and_clear':
+            self.stop()
+            logger.debug("%s", button)
+            return
+
+        if button == 'toggle':
+            self._send('toggle')
+            logger.debug("%s", button)
+            return
+
         if self.SAFE_MENU_ITEM_REGEX.match(button):
             self.get_sources(button)
             logger.debug("%s", button)
             return
 
         if button == 'system://config':
-            config_menu = [
-                {'title': 'WiFi Status', 'uri': 'system://wifi',     'service': None, 'type': 'folder', 'position': 0},
-                {'title': 'Sleep Timer', 'uri': 'system://sleep',    'service': None, 'type': 'folder', 'position': 1},
-                {'title': 'Shutdown',    'uri': 'system://shutdown', 'service': None, 'type': 'folder', 'position': 2},
-                {'title': 'Restart',     'uri': 'system://restart',  'service': None, 'type': 'folder', 'position': 3},
-            ]
-            self.menuManagerQ.put({'menu': json.dumps(config_menu)})
+            self._build_config_menu()
             return
 
         if button == 'system://wifi':
@@ -166,27 +176,38 @@ class Volumio:
 
         if button == 'system://sleep/15':
             self.set_sleep(15)
-            self.menuManagerQ.put({'go_back': True})
+            self._return_to_fresh_config()
             return
 
         if button == 'system://sleep/30':
             self.set_sleep(30)
-            self.menuManagerQ.put({'go_back': True})
+            self._return_to_fresh_config()
             return
 
         if button == 'system://sleep/45':
             self.set_sleep(45)
-            self.menuManagerQ.put({'go_back': True})
+            self._return_to_fresh_config()
             return
 
         if button == 'system://sleep/60':
             self.set_sleep(60)
-            self.menuManagerQ.put({'go_back': True})
+            self._return_to_fresh_config()
             return
 
         if button == 'system://sleep/cancel':
             self.cancel_sleep()
-            self.menuManagerQ.put({'go_back': True})
+            self._return_to_fresh_config()
+            return
+
+        if button == 'system://sleep/cancel/direct':
+            self.cancel_sleep()
+            msg = json.dumps([{'type': None, 'title': None, 'message': 'Sleep timer cancelled'}])
+            self.menuManagerQ.put({'message': msg, 'force': True})
+            return
+
+        if button == 'system://sleep/cancel/refresh_config':
+            self.cancel_sleep()
+            self._build_config_menu(remember=False)
             return
 
         if button == 'system://shutdown':
@@ -589,11 +610,58 @@ class Volumio:
         hours = minutes // 60
         mins = minutes % 60
         logger.debug("Setting sleep timer for %d minutes", minutes)
+        self._sleep_end_time = datetime.now() + timedelta(minutes=minutes)
         self._send('setSleep', {'time': f'{hours}:{mins:02d}', 'enabled': True})
 
     def cancel_sleep(self) -> None:
         logger.debug("Cancelling sleep timer")
+        self._sleep_end_time = None
         self._send('setSleep', {'time': '0:00', 'enabled': False})
+
+    def _return_to_fresh_config(self) -> None:
+        """Pop the stale config history entry then push a freshly-built config menu."""
+        self.menuManagerQ.put({'pop_history': True})
+        self._build_config_menu(remember=False)
+
+    def _build_config_menu(self, remember: bool = True) -> None:
+        sleep_label = 'Sleep Timer'
+        if self._sleep_end_time:
+            remaining_secs = int((self._sleep_end_time - datetime.now()).total_seconds())
+            if remaining_secs > 0:
+                remaining_mins = (remaining_secs + 59) // 60  # round up to nearest minute
+                if remaining_mins >= 60:
+                    h, m = divmod(remaining_mins, 60)
+                    sleep_label = f"Sleep: {h}h {m}m" if m else f"Sleep: {h}h"
+                else:
+                    sleep_label = f"Sleep: {remaining_mins}m"
+            else:
+                self._sleep_end_time = None  # timer has already fired
+
+        config_menu = [
+            {'title': 'WiFi Status', 'uri': 'system://wifi',     'service': None, 'type': 'folder', 'position': 0},
+            {'title': sleep_label,   'uri': 'system://sleep',    'service': None, 'type': 'folder', 'position': 1},
+            {'title': 'Shutdown',    'uri': 'system://shutdown', 'service': None, 'type': 'folder', 'position': 2},
+            {'title': 'Restart',     'uri': 'system://restart',  'service': None, 'type': 'folder', 'position': 3},
+        ]
+        self.menuManagerQ.put({'menu': json.dumps(config_menu), 'remember': remember, 'context': 'config'})
+
+    def _on_push_sleep(self, *args) -> None:
+        """Sync sleep state from Volumio (only getSleep responses carry useful data)."""
+        try:
+            data = args[0] if args else {}
+            # setSleep resolves with {} — ignore those empty responses
+            if not data or 'enabled' not in data:
+                return
+            if not data.get('enabled'):
+                self._sleep_end_time = None
+                return
+            time_str = data.get('time', '0:0')
+            h, m = time_str.split(':')
+            remaining_mins = int(h) * 60 + int(m)
+            self._sleep_end_time = datetime.now() + timedelta(minutes=remaining_mins) if remaining_mins > 0 else None
+            logger.debug("Sleep state synced: %s mins remaining", remaining_mins)
+        except Exception as e:
+            logger.error("Failed to process sleep state: %s", e)
 
     def stop(self) -> None:
         self._send('stop')

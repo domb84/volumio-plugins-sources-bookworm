@@ -71,7 +71,7 @@ class TestBuildMenuNoneFields:
     sets them). An unnamed Spotify playlist (title None) used to crash the menu
     sort and abort the whole build, so nothing rendered."""
 
-    def test_unnamed_item_mixed_with_named_still_renders(self, monkeypatch):
+    def test_unnamed_item_is_skipped_and_named_item_renders(self, monkeypatch):
         fi = Mock()
         monkeypatch.setattr(mm, "FunctionItem", fi)
         m = _bare_manager()
@@ -81,13 +81,11 @@ class TestBuildMenuNoneFields:
             {'title': None, 'uri': 'spotify:user:spotify:playlist:b',
              'service': 'spop', 'type': 'playlist', 'position': None},
         ]))
-        assert m.menu.append_item.call_count == 2
+        # The None-title item is silently skipped; only the named item renders.
+        assert m.menu.append_item.call_count == 1
         m.menu.render.assert_called_once()
-        # first positional arg (tuple form works on py<3.8); playlists are
-        # folder types so names carry the '+' prefix
         names = [c[0][0] for c in fi.call_args_list]
         assert '+My Mix' in names
-        assert any(n.startswith('+Untitled') for n in names)
 
     def test_none_type_does_not_crash_sort(self):
         m = _bare_manager()

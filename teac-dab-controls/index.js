@@ -104,14 +104,17 @@ teacdabcontrols.prototype.getUIConfig = function() {
             uiconf.sections[4].content[1].value = self.config.get('btn_enter');
             uiconf.sections[4].content[2].value = self.config.get('btn_radio');
             uiconf.sections[4].content[3].value = self.config.get('btn_spotify');
-            uiconf.sections[4].content[4].value = self.config.get('btn_stop');
-            uiconf.sections[4].content[5].value = self.config.get('btn_info');
-            uiconf.sections[4].content[6].value = self.config.get('btn_favourite');
-            uiconf.sections[4].content[7].value = self.config.get('btn_main_menu');
-            uiconf.sections[4].content[8].value = self.config.get('btn_back');
-            uiconf.sections[4].content[9].value = self.config.get('btn_no_press_channel1');
-            uiconf.sections[4].content[10].value = self.config.get('btn_no_press_channel2');
+            uiconf.sections[4].content[4].value = self.config.get('btn_info');
+            uiconf.sections[4].content[5].value = self.config.get('btn_favourite');
+            uiconf.sections[4].content[6].value = self.config.get('btn_main_menu');
+            uiconf.sections[4].content[7].value = self.config.get('btn_back');
+            uiconf.sections[4].content[8].value = self.config.get('btn_no_press_channel1');
+            uiconf.sections[4].content[9].value = self.config.get('btn_no_press_channel2');
+            uiconf.sections[4].content[10].value = self.config.get('btn_pause');
             uiconf.sections[4].content[11].value = self.config.get('btn_remove_favourite');
+            uiconf.sections[4].content[12].value = self.config.get('btn_sleep_timer');
+            uiconf.sections[4].content[13].value = self.config.get('btn_cancel_sleep_timer');
+            uiconf.sections[4].content[14].value = self.config.get('btn_dimmer');
             defer.resolve(uiconf);
         })
         .fail(function () {
@@ -192,10 +195,13 @@ var CAPTURE_LABELS = {
     btn_enter: 'Enter',
     btn_radio: 'Radio',
     btn_spotify: 'Spotify',
-    btn_stop: 'Stop',
     btn_info: 'Info',
     btn_favourite: 'Favourite',
+    btn_pause: 'Pause/Play',
     btn_remove_favourite: 'Remove Favourite',
+    btn_sleep_timer: 'Sleep Timer',
+    btn_cancel_sleep_timer: 'Cancel Sleep Timer',
+    btn_dimmer: 'Dimmer',
     btn_main_menu: 'Main Menu',
     btn_back: 'Back'
 };
@@ -204,10 +210,13 @@ var CAPTURE_LABELS = {
 teacdabcontrols.prototype.captureBtnEnter = function () { return this.startCapture('btn_enter'); };
 teacdabcontrols.prototype.captureBtnRadio = function () { return this.startCapture('btn_radio'); };
 teacdabcontrols.prototype.captureBtnSpotify = function () { return this.startCapture('btn_spotify'); };
-teacdabcontrols.prototype.captureBtnStop = function () { return this.startCapture('btn_stop'); };
 teacdabcontrols.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
 teacdabcontrols.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
+teacdabcontrols.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
 teacdabcontrols.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
+teacdabcontrols.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
+teacdabcontrols.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
+teacdabcontrols.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
 teacdabcontrols.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 teacdabcontrols.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 

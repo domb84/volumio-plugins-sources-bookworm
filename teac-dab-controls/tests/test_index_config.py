@@ -6,9 +6,9 @@ import pytest
 import index
 
 
-# btn_* keys that load_button_config expects to be present.
+# btn_* keys that load_button_config expects to be present (no btn_stop — removed).
 _BUTTON_KEYS = (
-    "btn_enter", "btn_radio", "btn_spotify", "btn_stop",
+    "btn_enter", "btn_radio", "btn_spotify",
     "btn_info", "btn_favourite", "btn_main_menu", "btn_back",
 )
 
@@ -32,6 +32,15 @@ def test_load_button_config():
     assert result["btn_enter"] == ("0", "12")
 
 
+def test_load_button_config_does_not_include_btn_stop():
+    cfg = {key: {"value": "0,12"} for key in _BUTTON_KEYS}
+    cfg["btn_stop"] = {"value": "0,31"}
+    result = index.load_button_config(cfg)
+    assert "btn_stop" not in result
+
+
+# --- Optional buttons (absent → omitted, present → included) ---
+
 def test_load_button_config_omits_remove_favourite_when_absent():
     cfg = {key: {"value": "0,12"} for key in _BUTTON_KEYS}
     assert "btn_remove_favourite" not in index.load_button_config(cfg)
@@ -42,6 +51,30 @@ def test_load_button_config_includes_remove_favourite_when_present():
     cfg["btn_remove_favourite"] = {"value": "0,20"}
     result = index.load_button_config(cfg)
     assert result["btn_remove_favourite"] == ("0", "20")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("btn_pause", "0,14"),
+    ("btn_sleep_timer", "0,18"),
+    ("btn_cancel_sleep_timer", "7,20"),
+    ("btn_dimmer", "0,20"),
+])
+def test_optional_button_omitted_when_absent(key, value):
+    cfg = {k: {"value": "0,12"} for k in _BUTTON_KEYS}
+    assert key not in index.load_button_config(cfg)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("btn_pause", "0,14"),
+    ("btn_sleep_timer", "0,18"),
+    ("btn_cancel_sleep_timer", "7,20"),
+    ("btn_dimmer", "0,20"),
+])
+def test_optional_button_included_when_present(key, value):
+    cfg = {k: {"value": "0,12"} for k in _BUTTON_KEYS}
+    cfg[key] = {"value": value}
+    result = index.load_button_config(cfg)
+    assert key in result
 
 
 def test_load_button_skip_config():
