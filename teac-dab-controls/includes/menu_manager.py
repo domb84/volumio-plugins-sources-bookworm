@@ -14,6 +14,7 @@ import re
 logger = logging.getLogger("Menu Manager")
 
 _SCROLL_IDLE_SECONDS = 3.0
+_MENU_IDLE_SECONDS = 30.0
 
 # Written by index.js just before a self-triggered restart so we can tell a
 # restart (capture/settings save) apart from a genuine stop/shutdown.
@@ -42,6 +43,7 @@ class MenuManager:
         self._pending_render_timer: Optional[threading.Timer] = None
         self._suppressed_info: Optional[str] = None
         self._info_release_timer: Optional[threading.Timer] = None
+        self._idle_timer: Optional[threading.Timer] = None
 
         # init menu
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)
@@ -87,6 +89,7 @@ class MenuManager:
                         self.menuAccessTime = datetime.now()
                         if self._suppressed_info is not None:
                             self._defer_info(self._suppressed_info)
+                        self._reset_idle_timer()
                         self.control_actions[action]()
                     else:
                         logger.warning(f"Unknown control action: {action}")
@@ -110,8 +113,14 @@ class MenuManager:
                             self._defer_info(queueItem['info'])
                         else:
                             self.show_track_info(queueItem['info'])
+                elif 'go_back' in queueItem:
+                    previous = self.go_back()
+                    if previous:
+                        self.build_menu(previous, remember=False)
                 elif 'message' in queueItem:
-                    self.show_message(queueItem['message'])
+                    self.show_message(queueItem['message'],
+                                      force=queueItem.get('force', False),
+                                      persist=queueItem.get('persist', False))
                 elif 'clear' in queueItem:
                     self.display_message("", clear=True)
                 else:
@@ -232,6 +241,9 @@ class MenuManager:
             if self._info_release_timer is not None:
                 self._info_release_timer.cancel()
                 self._info_release_timer = None
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
 
             self.menu.message("Shutting down...".upper())
             sleep(1.5)
@@ -252,6 +264,17 @@ class MenuManager:
         if self._pending_render_timer is not None:
             self._pending_render_timer.cancel()
             self._pending_render_timer = None
+
+    def _reset_idle_timer(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+        self._idle_timer = threading.Timer(_MENU_IDLE_SECONDS, self._on_menu_idle)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _on_menu_idle(self) -> None:
+        self._idle_timer = None
+        self.volumioQ.put({'show': 'info'})
 
     def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
         # clear will clear the display and not render anything after (ie for shut down)
@@ -335,7 +358,7 @@ class MenuManager:
             logger.error("Failed to process track info: %s", e)
 
 
-    def show_message(self, payload: str) -> None:
+    def show_message(self, payload: str, force: bool = False, persist: bool = False) -> None:
         ## Example
         # message = []
         # message.append({
@@ -345,6 +368,8 @@ class MenuManager:
         # })
         # message = json.dumps(message)
         # self.menuManagerQ.put({'message':message})
+        # force=True  bypasses duplicate/rate suppression
+        # persist=True skips the deferred menu re-render (message stays until next interaction)
 
         logger.debug("Message input: %s", payload)
         input_data = json.loads(payload)
@@ -358,8 +383,10 @@ class MenuManager:
 
                 if title:
                     message = f"{title}\n{message}"
-                    
-                self.display_message(message, autoscroll=True)
+
+                self.display_message(message, autoscroll=True, force=force)
+                if not persist:
+                    self._schedule_deferred(self.menu.render)
             except Exception as e:
                 logger.error("Failed to process message: %s", e)
 
@@ -379,12 +406,19 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu means we don't navigate: tell the user and stay on the
-        # current menu (display_message re-renders it after the message).
+        # An empty menu: if this was a background refresh (remember=False, e.g.
+        # after deleting the last favourite) navigate up to the parent menu so
+        # the user isn't left on a stale menu showing the just-deleted item.
+        # For any other empty-menu case, tell the user and stay put.
         # Checked before remember() so the back-button history isn't polluted,
         # and forced past the duplicate suppression because the selected item's
         # name has usually just been displayed by resolve_item.
         if not menu:
+            if not remember:
+                previous = self.go_back()
+                if previous:
+                    self.menuManagerQ.put({'menu': previous, 'remember': False})
+                    return
             return self.display_message("Menu is empty", force=True)
 
         # save last rendered menu for back button
@@ -422,7 +456,8 @@ class MenuManager:
 
                 # covers both "" and None (e.g. an unnamed Spotify playlist)
                 if not buttonName:
-                    buttonName = f"Untitled {counter}"
+                    logger.debug("Skipping unnamed menu item at position %d", counter)
+                    continue
 
                 if buttonType and any(buttonType.endswith(folder_type) for folder_type in folderTypes):
                     buttonName = f"+{buttonName}"

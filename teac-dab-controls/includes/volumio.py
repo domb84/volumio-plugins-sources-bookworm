@@ -41,6 +41,7 @@ class Volumio:
         self._force_next_state = False  # next pushState was explicitly requested (info button)
         self._last_browse_uri = None    # uri of the list currently on screen (for post-removal refresh)
         self._refresh_browse = False    # next pushBrowseLibrary replaces the menu without history
+        self._refresh_timer = None      # pending post-removal refresh timer
 
         self.ws_api = "http://localhost:3000"
         self.sio = socketio.Client(logger=False, engineio_logger=False,reconnection=True)
@@ -60,6 +61,7 @@ class Volumio:
         self.sio.on('pushToastMessage', self._on_toast)
         self.sio.on('urifavourites', self._on_response)
         self.sio.on('pushBrowseSources', self._on_push_browse_sources)
+        self.sio.on('pushInfoNetwork', self._on_push_info_network)
 
         # Process incoming requests from the volumioQ using blocking get
         while not (self.stop_event and self.stop_event.is_set()):
@@ -137,6 +139,87 @@ class Volumio:
             logger.debug("%s", button)
             return
 
+        if button == 'system://config':
+            config_menu = [
+                {'title': 'WiFi Status', 'uri': 'system://wifi',     'service': None, 'type': 'folder', 'position': 0},
+                {'title': 'Sleep Timer', 'uri': 'system://sleep',    'service': None, 'type': 'folder', 'position': 1},
+                {'title': 'Shutdown',    'uri': 'system://shutdown', 'service': None, 'type': 'folder', 'position': 2},
+                {'title': 'Restart',     'uri': 'system://restart',  'service': None, 'type': 'folder', 'position': 3},
+            ]
+            self.menuManagerQ.put({'menu': json.dumps(config_menu)})
+            return
+
+        if button == 'system://wifi':
+            self._send('getInfoNetwork')
+            return
+
+        if button == 'system://sleep':
+            sleep_menu = [
+                {'title': '15 Minutes',   'uri': 'system://sleep/15',     'service': None, 'type': None, 'position': 0},
+                {'title': '30 Minutes',   'uri': 'system://sleep/30',     'service': None, 'type': None, 'position': 1},
+                {'title': '45 Minutes',   'uri': 'system://sleep/45',     'service': None, 'type': None, 'position': 2},
+                {'title': '60 Minutes',   'uri': 'system://sleep/60',     'service': None, 'type': None, 'position': 3},
+                {'title': 'Cancel Timer', 'uri': 'system://sleep/cancel', 'service': None, 'type': None, 'position': 4},
+            ]
+            self.menuManagerQ.put({'menu': json.dumps(sleep_menu)})
+            return
+
+        if button == 'system://sleep/15':
+            self.set_sleep(15)
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://sleep/30':
+            self.set_sleep(30)
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://sleep/45':
+            self.set_sleep(45)
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://sleep/60':
+            self.set_sleep(60)
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://sleep/cancel':
+            self.cancel_sleep()
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://shutdown':
+            confirm_menu = [
+                {'title': 'Confirm Shutdown', 'uri': 'system://shutdown/confirm', 'service': None, 'type': None, 'position': 0},
+                {'title': 'Cancel',           'uri': 'system://cancel',           'service': None, 'type': None, 'position': 1},
+            ]
+            self.menuManagerQ.put({'menu': json.dumps(confirm_menu)})
+            return
+
+        if button == 'system://restart':
+            confirm_menu = [
+                {'title': 'Confirm Restart', 'uri': 'system://restart/confirm', 'service': None, 'type': None, 'position': 0},
+                {'title': 'Cancel',          'uri': 'system://cancel',          'service': None, 'type': None, 'position': 1},
+            ]
+            self.menuManagerQ.put({'menu': json.dumps(confirm_menu)})
+            return
+
+        if button == 'system://cancel':
+            self.menuManagerQ.put({'go_back': True})
+            return
+
+        if button == 'system://noop':
+            return
+
+        if button == 'system://shutdown/confirm':
+            self._send('shutdown')
+            return
+
+        if button == 'system://restart/confirm':
+            self._send('reboot')
+            return
+
         logger.warning("Unhandled button item: %s", button)
 
     def _parse_favourite(self, raw):
@@ -157,27 +240,33 @@ class Volumio:
     def _process_remove_favourite_item(self, item):
         parsed = self._parse_favourite(item['remove_favourite'])
         if parsed is not None:
+            # Set the flag before sending so that any pushBrowseLibrary Volumio
+            # emits immediately in response to the removal is treated as a
+            # refresh (remember=False) rather than a user-navigated menu.
+            self._refresh_browse = True
             self.remove_favourite(*parsed)
             self._schedule_browse_refresh()
 
     def _schedule_browse_refresh(self):
         """Re-browse the list currently on screen after a favourite removal.
 
-        Volumio confirms a removal with a toast but never pushes an updated
-        list, so without this the LCD keeps showing the menu built when the
-        list was entered (the removed item only disappears after re-entering
-        the menu). The delay lets the toast display first; the resulting push
-        replaces the current menu without being added to back-button history.
+        Volumio sometimes pushes an updated list immediately after removal and
+        sometimes does not — the timer is a fallback for the latter case. If
+        _on_push_browse_library fires first it cancels this timer so we don't
+        re-browse (and potentially trigger a second go-back) unnecessarily.
         """
         uri = self._last_browse_uri
         if not uri:
             return
-        timer = threading.Timer(_REMOVE_REFRESH_DELAY_SECONDS,
+        if self._refresh_timer is not None:
+            self._refresh_timer.cancel()
+        self._refresh_timer = threading.Timer(_REMOVE_REFRESH_DELAY_SECONDS,
                                 self._refresh_current_browse, args=(uri,))
-        timer.daemon = True
-        timer.start()
+        self._refresh_timer.daemon = True
+        self._refresh_timer.start()
 
     def _refresh_current_browse(self, uri):
+        self._refresh_timer = None  # timer has fired; clear so the response isn't ignored
         self._refresh_browse = True
         self.get_sources(uri)
 
@@ -354,6 +443,46 @@ class Volumio:
             self._pending_info_timer = None
         self.menuManagerQ.put({'info': result})
 
+    def _on_push_info_network(self, *args):
+        try:
+            networks = args[0] if args else []
+            items = []
+            pos = 0
+
+            def _add(label):
+                nonlocal pos
+                items.append({'title': label, 'uri': 'system://noop', 'service': None, 'type': None, 'position': pos})
+                pos += 1
+
+            if not networks:
+                _add('Not connected')
+            else:
+                for net in networks:
+                    net_type = net.get('type', 'Unknown')
+                    ip    = (net.get('ip')    or '').strip()
+                    speed = (net.get('speed') or '').strip()
+                    if net_type == 'Wireless':
+                        ssid   = (net.get('ssid') or 'Unknown').strip()
+                        signal = net.get('signal')
+                        _add(f"SSID: {ssid}")
+                        if ip:
+                            _add(f"IP: {ip}")
+                        if signal is not None:
+                            _add(f"Signal: {signal}/5")
+                        if speed:
+                            _add(f"Speed: {speed}")
+                    else:
+                        _add('Wired')
+                        if ip:
+                            _add(f"IP: {ip}")
+                        if speed:
+                            _add(f"Speed: {speed}")
+
+            logger.debug("Network info menu: %s", items)
+            self.menuManagerQ.put({'menu': json.dumps(items)})
+        except Exception as e:
+            logger.error("Failed to process network info: %s", e)
+
     def _on_push_browse_library(self, *args):
         logger.debug("Received: %s", args)
 
@@ -369,6 +498,17 @@ class Volumio:
 
         result = json.dumps(sources_list)
         logger.debug("%s", result)
+        # Volumio emits a spurious empty pushBrowseLibrary immediately after
+        # removeFromFavourites (regardless of remaining items). If the timer is
+        # still pending that means we haven't done the real re-browse yet, so
+        # ignore this empty push entirely and let the timer fetch the actual
+        # updated list. If we got real content, cancel the now-redundant timer.
+        if not sources_list and self._refresh_timer is not None:
+            logger.debug("Ignoring spurious empty pushBrowseLibrary while refresh timer is pending")
+            return
+        if sources_list and self._refresh_timer is not None:
+            self._refresh_timer.cancel()
+            self._refresh_timer = None
         refresh, self._refresh_browse = self._refresh_browse, False
         self.menuManagerQ.put({'menu': result, 'remember': not refresh})
 
@@ -384,6 +524,7 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
+        sources_list.append({'title': 'Configuration', 'uri': 'system://config', 'service': None, 'type': 'folder', 'position': None})
         result = json.dumps(sources_list)
         logger.debug(result)
         self.menuManagerQ.put({'menu': result})
@@ -443,6 +584,16 @@ class Volumio:
         else:
             logger.debug("URi does not match webradio or spotify: %s", uri)
 
+
+    def set_sleep(self, minutes: int) -> None:
+        hours = minutes // 60
+        mins = minutes % 60
+        logger.debug("Setting sleep timer for %d minutes", minutes)
+        self._send('setSleep', {'time': f'{hours}:{mins:02d}', 'enabled': True})
+
+    def cancel_sleep(self) -> None:
+        logger.debug("Cancelling sleep timer")
+        self._send('setSleep', {'time': '0:00', 'enabled': False})
 
     def stop(self) -> None:
         self._send('stop')
