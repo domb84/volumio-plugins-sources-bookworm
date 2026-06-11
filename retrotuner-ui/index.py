@@ -9,10 +9,10 @@ from typing import Any, Dict, Tuple
 from includes import api, controls, menu_manager, volumio
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-CONFIG_PATH = Path("/data/configuration/user_interface/teac-dab-controls/config.json")
+CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json")
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-logger = logging.getLogger("Teac DAB controls")
+logger = logging.getLogger("RetroTuner UI")
 logger.setLevel(logging.DEBUG)
 
 stop_event = threading.Event()

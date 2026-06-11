@@ -6,11 +6,11 @@ var exec = require('child_process').exec;
 
 // Dropped just before a self-triggered restart so the python service can tell a
 // restart (capture/settings save) apart from a genuine stop/shutdown.
-var RESTART_MARKER_PATH = '/tmp/teac-dab-controls-restarting';
+var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
 
-module.exports = teacdabcontrols;
-function teacdabcontrols(context) {
+module.exports = retrotunerui;
+function retrotunerui(context) {
 	var self = this;
 
 	this.context = context;
@@ -21,7 +21,7 @@ function teacdabcontrols(context) {
 
 
 
-teacdabcontrols.prototype.onVolumioStart = function()
+retrotunerui.prototype.onVolumioStart = function()
 {
 	var self = this;
 	var configFile=this.commandRouter.pluginManager.getConfigurationFile(this.context,'config.json');
@@ -31,48 +31,48 @@ teacdabcontrols.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
-teacdabcontrols.prototype.onStart = function() {
+retrotunerui.prototype.onStart = function() {
     var self = this;
 
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
-        .then(function () { return self.teacdabcontrolsServiceCmds('start'); })
-        .fail(function (e) { self.logger.error('Teac DAB Controls - error starting: ' + e); });
+        .then(function () { return self.retrotuneruiServiceCmds('start'); })
+        .fail(function (e) { self.logger.error('RetroTuner UI - error starting: ' + e); });
 };
 
-teacdabcontrols.prototype.onStop = function() {
+retrotunerui.prototype.onStop = function() {
     var self = this;
 
-    return self.teacdabcontrolsServiceCmds('stop')
+    return self.retrotuneruiServiceCmds('stop')
         .then(function () { return self.pigpiodServiceCmds('stop'); })
-        .fail(function (e) { self.logger.error('Teac DAB Controls - error stopping: ' + e); });
+        .fail(function (e) { self.logger.error('RetroTuner UI - error stopping: ' + e); });
 };
 
-teacdabcontrols.prototype.onRestart = function() {
+retrotunerui.prototype.onRestart = function() {
     var self = this;
 
     // Mark this as our own restart so the controls don't show the shutdown
     // screen (only genuine stops/shutdowns should).
     try { fs.writeFileSync(RESTART_MARKER_PATH, String(Date.now())); }
-    catch (e) { self.logger.error('Teac DAB Controls - could not write restart marker: ' + e); }
+    catch (e) { self.logger.error('RetroTuner UI - could not write restart marker: ' + e); }
 
     // Only restart our own service. Use 'start' (not 'restart') for pigpiod so a
     // running daemon is left untouched — restarting it here races the controls'
     // pigpio reconnect and leaves the rotary encoder dead until the next restart.
     // Config changes never require pigpiod to restart.
     return self.pigpiodServiceCmds('start')
-        .then(function () { return self.teacdabcontrolsServiceCmds('restart'); })
-        .fail(function (e) { self.logger.error('Teac DAB Controls - error restarting: ' + e); });
+        .then(function () { return self.retrotuneruiServiceCmds('restart'); })
+        .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
 };
 
 
 // Configuration Methods -----------------------------------------------------------------------------
 
-teacdabcontrols.prototype.getUIConfig = function() {
+retrotunerui.prototype.getUIConfig = function() {
     const self = this;
     const defer = libQ.defer();
 
-    this.logger.info('Teac DAB Controls - getUIConfig');
+    this.logger.info('RetroTuner UI - getUIConfig');
 
     const lang_code = this.commandRouter.sharedVars.get('language_code');
 
@@ -92,40 +92,41 @@ teacdabcontrols.prototype.getUIConfig = function() {
             uiconf.sections[0].content[9].value = self.config.get('button_debounce_rate');
             uiconf.sections[0].content[10].value = self.config.get('button_cooldown_rate');
             // sections[1] is "Configure Buttons (Capture)" — action buttons, no stored values
-            uiconf.sections[2].content[0].value = self.config.get('rot_enc_A');
-            uiconf.sections[2].content[1].value = self.config.get('rot_enc_B');
-            uiconf.sections[3].content[0].value = self.config.get('lcd_rs');
-            uiconf.sections[3].content[1].value = self.config.get('lcd_e');
-            uiconf.sections[3].content[2].value = self.config.get('lcd_d4');
-            uiconf.sections[3].content[3].value = self.config.get('lcd_d5');
-            uiconf.sections[3].content[4].value = self.config.get('lcd_d6');
-            uiconf.sections[3].content[5].value = self.config.get('lcd_d7');
-            // sections[4] is the advanced section; content[0] is the "Edit values manually" toggle
-            uiconf.sections[4].content[1].value = self.config.get('btn_enter');
-            uiconf.sections[4].content[2].value = self.config.get('btn_radio');
-            uiconf.sections[4].content[3].value = self.config.get('btn_spotify');
-            uiconf.sections[4].content[4].value = self.config.get('btn_info');
-            uiconf.sections[4].content[5].value = self.config.get('btn_favourite');
-            uiconf.sections[4].content[6].value = self.config.get('btn_main_menu');
-            uiconf.sections[4].content[7].value = self.config.get('btn_back');
-            uiconf.sections[4].content[8].value = self.config.get('btn_no_press_channel1');
-            uiconf.sections[4].content[9].value = self.config.get('btn_no_press_channel2');
-            uiconf.sections[4].content[10].value = self.config.get('btn_pause');
-            uiconf.sections[4].content[11].value = self.config.get('btn_remove_favourite');
-            uiconf.sections[4].content[12].value = self.config.get('btn_sleep_timer');
-            uiconf.sections[4].content[13].value = self.config.get('btn_cancel_sleep_timer');
-            uiconf.sections[4].content[14].value = self.config.get('btn_dimmer');
+            // sections[2] is "Clear Button Mappings" — action buttons, no stored values
+            uiconf.sections[3].content[0].value = self.config.get('rot_enc_A');
+            uiconf.sections[3].content[1].value = self.config.get('rot_enc_B');
+            uiconf.sections[4].content[0].value = self.config.get('lcd_rs');
+            uiconf.sections[4].content[1].value = self.config.get('lcd_e');
+            uiconf.sections[4].content[2].value = self.config.get('lcd_d4');
+            uiconf.sections[4].content[3].value = self.config.get('lcd_d5');
+            uiconf.sections[4].content[4].value = self.config.get('lcd_d6');
+            uiconf.sections[4].content[5].value = self.config.get('lcd_d7');
+            // sections[5] is the advanced section; content[0] is the "Edit values manually" toggle
+            uiconf.sections[5].content[1].value = self.config.get('btn_enter');
+            uiconf.sections[5].content[2].value = self.config.get('btn_radio');
+            uiconf.sections[5].content[3].value = self.config.get('btn_spotify');
+            uiconf.sections[5].content[4].value = self.config.get('btn_info');
+            uiconf.sections[5].content[5].value = self.config.get('btn_favourite');
+            uiconf.sections[5].content[6].value = self.config.get('btn_main_menu');
+            uiconf.sections[5].content[7].value = self.config.get('btn_back');
+            uiconf.sections[5].content[8].value = self.config.get('btn_no_press_channel1');
+            uiconf.sections[5].content[9].value = self.config.get('btn_no_press_channel2');
+            uiconf.sections[5].content[10].value = self.config.get('btn_pause');
+            uiconf.sections[5].content[11].value = self.config.get('btn_remove_favourite');
+            uiconf.sections[5].content[12].value = self.config.get('btn_sleep_timer');
+            uiconf.sections[5].content[13].value = self.config.get('btn_cancel_sleep_timer');
+            uiconf.sections[5].content[14].value = self.config.get('btn_dimmer');
             defer.resolve(uiconf);
         })
         .fail(function () {
-            self.logger.error('Teac DAB Controls - Failed to parse UI Configuration page:' + error);
+            self.logger.error('RetroTuner UI - Failed to parse UI Configuration page:' + error);
             defer.reject(new Error());
         });
 
     return defer.promise;
 };
 
-teacdabcontrols.prototype.saveOptions = function (data) {
+retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
     // Function to check if a value is numeric, boolean, or comma-separated numbers
@@ -144,7 +145,7 @@ teacdabcontrols.prototype.saveOptions = function (data) {
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
 
-    self.logger.info('Teac DAB Controls - saving settings');
+    self.logger.info('RetroTuner UI - saving settings');
 
     const formattedJsonString = JSON.stringify(data, null, 2);
     // console.log(formattedJsonString);
@@ -162,30 +163,32 @@ teacdabcontrols.prototype.saveOptions = function (data) {
                 self.config.set(key, value);
             } else {
                 self.logger.error(`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`);
-                this.commandRouter.pushToastMessage('fail', ("Teac DAB Controls"), (`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`));
+                this.commandRouter.pushToastMessage('fail', ("RetroTuner UI"), (`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`));
             }
         }
     }
     
-    this.commandRouter.pushToastMessage('success', ("Teac DAB Controls"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
+    self.logger.info('RetroTuner UI - settings saved');
+    this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    self.logger.info('Teac DAB Controls - settings saved');
-    self.logger.info('Teac DAB Controls - restarting services');
-    self.onRestart()
+    if (self._checkButtonConflicts()) {
+        self.logger.info('RetroTuner UI - restarting services');
+        self.onRestart();
+    }
 
     return libQ.resolve();
 };
 
 
-teacdabcontrols.prototype.getConfigurationFiles = function() {
+retrotunerui.prototype.getConfigurationFiles = function() {
 	return ['config.json'];
 }
 
 // Button capture ("learn") -------------------------------------------------
 
-var CAPTURE_FLAG_PATH = '/tmp/teac-dab-controls-capture-on';
-var CAPTURE_READING_PATH = '/tmp/teac-dab-controls-capture.json';
-var CAPTURE_BASELINE_PATH = '/tmp/teac-dab-controls-capture-baseline.json';
+var CAPTURE_FLAG_PATH = '/tmp/retrotuner-ui-capture-on';
+var CAPTURE_READING_PATH = '/tmp/retrotuner-ui-capture.json';
+var CAPTURE_BASELINE_PATH = '/tmp/retrotuner-ui-capture-baseline.json';
 var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much inactivity
 var CAPTURE_POLL_MS = 200;
 var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
@@ -206,32 +209,101 @@ var CAPTURE_LABELS = {
     btn_back: 'Back'
 };
 
+// Conflict detection helpers ---------------------------------------------------
+
+function parseButtonMapping(str) {
+    if (!str) return null;
+    const commaIdx = str.indexOf(',');
+    if (commaIdx === -1) return null;
+    const channel = parseInt(str.slice(0, commaIdx).trim(), 10);
+    const valuePart = str.slice(commaIdx + 1).trim();
+    if (isNaN(channel) || !valuePart) return null;
+    if (valuePart.includes('-')) {
+        const parts = valuePart.split('-').map(function (s) { return parseInt(s.trim(), 10); });
+        if (parts.some(isNaN)) return null;
+        return { channel: channel, type: 'range', low: Math.min.apply(null, parts), high: Math.max.apply(null, parts) };
+    }
+    const value = parseInt(valuePart, 10);
+    if (isNaN(value)) return null;
+    return { channel: channel, type: 'value', value: value };
+}
+
+function mappingsOverlap(a, b) {
+    if (a.channel !== b.channel) return false;
+    if (a.type === 'value' && b.type === 'value') return a.value === b.value;
+    if (a.type === 'range' && b.type === 'range') return a.low <= b.high && b.low <= a.high;
+    const point = a.type === 'value' ? a.value : b.value;
+    const range  = a.type === 'range'  ? a       : b;
+    return point >= range.low && point <= range.high;
+}
+
 // One entry point per button (UIConfig button onClick targets these by name)
-teacdabcontrols.prototype.captureBtnEnter = function () { return this.startCapture('btn_enter'); };
-teacdabcontrols.prototype.captureBtnRadio = function () { return this.startCapture('btn_radio'); };
-teacdabcontrols.prototype.captureBtnSpotify = function () { return this.startCapture('btn_spotify'); };
-teacdabcontrols.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
-teacdabcontrols.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
-teacdabcontrols.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
-teacdabcontrols.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
-teacdabcontrols.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
-teacdabcontrols.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
-teacdabcontrols.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
-teacdabcontrols.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
-teacdabcontrols.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
+retrotunerui.prototype.captureBtnEnter = function () { return this.startCapture('btn_enter'); };
+retrotunerui.prototype.captureBtnRadio = function () { return this.startCapture('btn_radio'); };
+retrotunerui.prototype.captureBtnSpotify = function () { return this.startCapture('btn_spotify'); };
+retrotunerui.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
+retrotunerui.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
+retrotunerui.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
+retrotunerui.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
+retrotunerui.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
+retrotunerui.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
+retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
+retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
+retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
+
+// Clear entry points — one per button, same pattern as capture entry points
+retrotunerui.prototype.clearBtnEnter             = function () { return this.clearButton('btn_enter'); };
+retrotunerui.prototype.clearBtnRadio             = function () { return this.clearButton('btn_radio'); };
+retrotunerui.prototype.clearBtnSpotify           = function () { return this.clearButton('btn_spotify'); };
+retrotunerui.prototype.clearBtnInfo              = function () { return this.clearButton('btn_info'); };
+retrotunerui.prototype.clearBtnFavourite         = function () { return this.clearButton('btn_favourite'); };
+retrotunerui.prototype.clearBtnPause             = function () { return this.clearButton('btn_pause'); };
+retrotunerui.prototype.clearBtnRemoveFavourite   = function () { return this.clearButton('btn_remove_favourite'); };
+retrotunerui.prototype.clearBtnSleepTimer        = function () { return this.clearButton('btn_sleep_timer'); };
+retrotunerui.prototype.clearBtnCancelSleepTimer  = function () { return this.clearButton('btn_cancel_sleep_timer'); };
+retrotunerui.prototype.clearBtnMainMenu          = function () { return this.clearButton('btn_main_menu'); };
+retrotunerui.prototype.clearBtnBack              = function () { return this.clearButton('btn_back'); };
+retrotunerui.prototype.clearBtnDimmer            = function () { return this.clearButton('btn_dimmer'); };
+
+retrotunerui.prototype.clearButton = function (key) {
+    const self = this;
+    const label = CAPTURE_LABELS[key];
+    if (!label) {
+        self.logger.error('RetroTuner UI - clearButton: unknown key ' + key);
+        return libQ.resolve();
+    }
+    self.config.set(key, '');
+    // Remove from any in-progress capture session so saveCapture won't re-apply it.
+    if (self._capturedValues && label in self._capturedValues) {
+        delete self._capturedValues[label];
+    }
+    self.logger.info('RetroTuner UI - cleared mapping for ' + label);
+    self.commandRouter.pushToastMessage('success', 'RetroTuner UI',
+        '"' + label + '" cleared. Click "Apply & Restart" to activate.');
+    return libQ.resolve();
+};
+
+retrotunerui.prototype.restartControls = function () {
+    const self = this;
+    if (self._checkButtonConflicts()) {
+        self.commandRouter.pushToastMessage('info', 'RetroTuner UI', 'Restarting controls...');
+        self.onRestart();
+    }
+    return libQ.resolve();
+};
 
 // Begin a capture session if one isn't already running. The session keeps
 // the controls paused (via the flag file) until the user saves or goes
 // idle, so button presses never reach the device while configuring.
 // Returns false if the session could not be started.
-teacdabcontrols.prototype.ensureCaptureSession = function () {
+retrotunerui.prototype.ensureCaptureSession = function () {
     const self = this;
     if (self._captureSession) { return true; }
 
     try {
         fs.writeFileSync(CAPTURE_FLAG_PATH, '');
     } catch (e) {
-        self.logger.error('Teac DAB Controls - could not start capture: ' + e);
+        self.logger.error('RetroTuner UI - could not start capture: ' + e);
         self.commandRouter.pushToastMessage('error', 'Button Capture', 'Could not start capture mode.');
         return false;
     }
@@ -242,7 +314,7 @@ teacdabcontrols.prototype.ensureCaptureSession = function () {
     return true;
 };
 
-teacdabcontrols.prototype.startCapture = function (targetKey) {
+retrotunerui.prototype.startCapture = function (targetKey) {
     const self = this;
     const label = CAPTURE_LABELS[targetKey] || targetKey;
 
@@ -259,7 +331,7 @@ teacdabcontrols.prototype.startCapture = function (targetKey) {
     return libQ.resolve();
 };
 
-teacdabcontrols.prototype.pollCapture = function () {
+retrotunerui.prototype.pollCapture = function () {
     const self = this;
     const session = self._captureSession;
     if (!session) { self.endCaptureSession(); return; }
@@ -318,7 +390,7 @@ teacdabcontrols.prototype.pollCapture = function () {
 // Capture the resting (no-press) value of both ADC channels. The python side
 // measures each channel's baseline as soon as capture mode starts; we just
 // need the user to leave the buttons alone for a moment, then read it back.
-teacdabcontrols.prototype.captureBaseResistance = function () {
+retrotunerui.prototype.captureBaseResistance = function () {
     const self = this;
 
     if (!self.ensureCaptureSession()) { return libQ.resolve(); }
@@ -338,7 +410,7 @@ teacdabcontrols.prototype.captureBaseResistance = function () {
     return libQ.resolve();
 };
 
-teacdabcontrols.prototype.finishBaseResistanceCapture = function (session, startSeq) {
+retrotunerui.prototype.finishBaseResistanceCapture = function (session, startSeq) {
     const self = this;
     if (self._captureSession !== session) { return; }  // session ended in the meantime
 
@@ -373,7 +445,7 @@ teacdabcontrols.prototype.finishBaseResistanceCapture = function (session, start
         '. Configure another button, or click "Save & Restart Controls".');
 };
 
-teacdabcontrols.prototype.endCaptureSession = function () {
+retrotunerui.prototype.endCaptureSession = function () {
     const self = this;
     if (self._captureTimer) {
         clearInterval(self._captureTimer);
@@ -386,7 +458,7 @@ teacdabcontrols.prototype.endCaptureSession = function () {
 };
 
 // Apply everything captured this session and restart the controls once.
-teacdabcontrols.prototype.saveCapture = function () {
+retrotunerui.prototype.saveCapture = function () {
     const self = this;
 
     self.endCaptureSession();   // resume controls
@@ -401,19 +473,52 @@ teacdabcontrols.prototype.saveCapture = function () {
     }
 
     const summary = labels.map(function (label) { return label + ' = ' + captured[label]; }).join(', ');
+    self._capturedValues = {};
+
+    if (!self._checkButtonConflicts()) {
+        self.commandRouter.pushToastMessage('info', 'Button Capture',
+            'Values saved (' + summary + ') but restart blocked — fix the conflict above first.');
+        return libQ.resolve();
+    }
+
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Saved (' + summary + '). Restarting controls...');
-
-    self._capturedValues = {};
     self.onRestart();
     return libQ.resolve();
+};
+
+// Returns true if no conflicts exist; false and fires an error toast if any are found.
+retrotunerui.prototype._checkButtonConflicts = function () {
+    const self = this;
+    const mappings = Object.keys(CAPTURE_LABELS)
+        .map(function (key) {
+            return { label: CAPTURE_LABELS[key], parsed: parseButtonMapping(self.config.get(key)) };
+        })
+        .filter(function (m) { return m.parsed !== null; });
+
+    const conflicts = [];
+    for (let i = 0; i < mappings.length; i++) {
+        for (let j = i + 1; j < mappings.length; j++) {
+            if (mappingsOverlap(mappings[i].parsed, mappings[j].parsed)) {
+                conflicts.push('"' + mappings[i].label + '" and "' + mappings[j].label + '"');
+            }
+        }
+    }
+
+    if (conflicts.length > 0) {
+        self.logger.error('RetroTuner UI - button conflicts detected: ' + conflicts.join('; '));
+        self.commandRouter.pushToastMessage('error', 'RetroTuner UI',
+            'Button conflict: ' + conflicts.join('; ') + '. Restart blocked — please remap before saving.');
+        return false;
+    }
+    return true;
 };
 
 // Plugin methods -----------------------------------------------------------------------------
 
 // Run a systemctl command asynchronously so Volumio's event loop is never
 // blocked while systemd works (a restart can wait on the old process to stop).
-teacdabcontrols.prototype.systemctl = function (cmd, unit) {
+retrotunerui.prototype.systemctl = function (cmd, unit) {
     var self = this;
 
     if (!['start', 'stop', 'restart'].includes(cmd)) {
@@ -423,24 +528,24 @@ teacdabcontrols.prototype.systemctl = function (cmd, unit) {
     const defer = libQ.defer();
     exec(`/usr/bin/sudo /bin/systemctl ${cmd} ${unit} -q`, { uid: 1000, gid: 1000 }, function (error, stdout, stderr) {
         if (error) {
-            self.logger.error(`Teac DAB Controls - unable to ${cmd} ${unit}: ${error}`);
+            self.logger.error(`RetroTuner UI - unable to ${cmd} ${unit}: ${error}`);
             defer.reject(error);
             return;
         }
         if (stderr) {
-            self.logger.error(`Teac DAB Controls - ${cmd} ${unit} stderr: ${stderr}`);
+            self.logger.error(`RetroTuner UI - ${cmd} ${unit} stderr: ${stderr}`);
         }
-        self.logger.info(`Teac DAB Controls - ${unit} ${cmd} complete`);
+        self.logger.info(`RetroTuner UI - ${unit} ${cmd} complete`);
         defer.resolve();
     });
 
     return defer.promise;
 };
 
-teacdabcontrols.prototype.teacdabcontrolsServiceCmds = function (cmd) {
-    return this.systemctl(cmd, 'teac-dab-controls.service');
+retrotunerui.prototype.retrotuneruiServiceCmds = function (cmd) {
+    return this.systemctl(cmd, 'retrotuner-ui.service');
 };
 
-teacdabcontrols.prototype.pigpiodServiceCmds = function (cmd) {
+retrotunerui.prototype.pigpiodServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'pigpiod.service');
 };

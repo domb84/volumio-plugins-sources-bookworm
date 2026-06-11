@@ -18,7 +18,7 @@ _MENU_IDLE_SECONDS = 30.0
 
 # Written by index.js just before a self-triggered restart so we can tell a
 # restart (capture/settings save) apart from a genuine stop/shutdown.
-_RESTART_MARKER_PATH = "/tmp/teac-dab-controls-restarting"
+_RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem

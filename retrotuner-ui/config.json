@@ -85,11 +85,11 @@
     },
     "btn_spotify": {
         "type": "text",
-        "value": "0, 12"
+        "value": ""
     },
     "btn_pause": {
         "type": "text",
-        "value": ""
+        "value": "0, 31"
     },
     "btn_info": {
         "type": "text",
@@ -105,11 +105,11 @@
     },
     "btn_sleep_timer": {
         "type": "text",
-        "value": ""
+        "value": "7, 31"
     },
     "btn_cancel_sleep_timer": {
         "type": "text",
-        "value": ""
+        "value": "7, 29"
     },
     "btn_main_menu": {
         "type": "text",
@@ -121,7 +121,7 @@
     },
     "btn_dimmer": {
         "type": "text",
-        "value": "0, 20"
+        "value": "0, 21"
     },
     "btn_no_press_channel1": {
         "type": "text",

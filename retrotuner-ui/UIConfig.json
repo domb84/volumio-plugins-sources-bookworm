@@ -1,6 +1,6 @@
 {
   "page": {
-    "label": "Teac DAB Controls Configuration"
+    "label": "RetroTuner UI Configuration"
   },
   "sections": [
     {
@@ -11,7 +11,7 @@
       "description": "Pin configuration to read button presses from an MCP3008 ADC.",
       "onSave": {
         "type": "controller",
-        "endpoint":"user_interface/teac-dab-controls",
+        "endpoint":"user_interface/retrotuner-ui",
         "method":"saveOptions"
       },
       "saveButton": {
@@ -122,7 +122,7 @@
           "label": "Configure Enter",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnEnter",
             "data": []
           }
@@ -133,7 +133,7 @@
           "label": "Configure Radio",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnRadio",
             "data": []
           }
@@ -144,7 +144,7 @@
           "label": "Configure Spotify",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnSpotify",
             "data": []
           }
@@ -155,7 +155,7 @@
           "label": "Configure Info",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnInfo",
             "data": []
           }
@@ -166,7 +166,7 @@
           "label": "Configure Favourite",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnFavourite",
             "data": []
           }
@@ -177,7 +177,7 @@
           "label": "Configure Pause/Play",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnPause",
             "data": []
           }
@@ -188,7 +188,7 @@
           "label": "Configure Remove Favourite",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnRemoveFavourite",
             "data": []
           }
@@ -199,7 +199,7 @@
           "label": "Configure Sleep Timer",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnSleepTimer",
             "data": []
           }
@@ -210,7 +210,7 @@
           "label": "Configure Cancel Sleep Timer",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnCancelSleepTimer",
             "data": []
           }
@@ -221,7 +221,7 @@
           "label": "Configure Main Menu",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnMainMenu",
             "data": []
           }
@@ -232,7 +232,7 @@
           "label": "Configure Back",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnBack",
             "data": []
           }
@@ -243,7 +243,7 @@
           "label": "Configure Dimmer",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBtnDimmer",
             "data": []
           }
@@ -254,7 +254,7 @@
           "label": "Capture Base Resistance (press nothing)",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "captureBaseResistance",
             "data": []
           }
@@ -265,8 +265,160 @@
           "label": "Save & Restart Controls",
           "onClick": {
             "type": "controller",
-            "endpoint": "user_interface/teac-dab-controls",
+            "endpoint": "user_interface/retrotuner-ui",
             "method": "saveCapture",
+            "data": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "button_clear",
+      "element": "section",
+      "label": "Clear Button Mappings",
+      "icon": "fa-times-circle",
+      "description": "Remove a button's mapping to disable it or free it up for remapping to something else. Clearing a button does not restart the controls — click 'Apply & Restart' at the bottom of this section once you are done.",
+      "content": [
+        {
+          "id": "clear_btn_enter",
+          "element": "button",
+          "label": "Clear Enter",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnEnter",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_radio",
+          "element": "button",
+          "label": "Clear Radio",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnRadio",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_spotify",
+          "element": "button",
+          "label": "Clear Spotify",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnSpotify",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_info",
+          "element": "button",
+          "label": "Clear Info",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnInfo",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_favourite",
+          "element": "button",
+          "label": "Clear Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_pause",
+          "element": "button",
+          "label": "Clear Pause/Play",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnPause",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_remove_favourite",
+          "element": "button",
+          "label": "Clear Remove Favourite",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnRemoveFavourite",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_sleep_timer",
+          "element": "button",
+          "label": "Clear Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnSleepTimer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_cancel_sleep_timer",
+          "element": "button",
+          "label": "Clear Cancel Sleep Timer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnCancelSleepTimer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_main_menu",
+          "element": "button",
+          "label": "Clear Main Menu",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnMainMenu",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_back",
+          "element": "button",
+          "label": "Clear Back",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnBack",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_btn_dimmer",
+          "element": "button",
+          "label": "Clear Dimmer",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearBtnDimmer",
+            "data": []
+          }
+        },
+        {
+          "id": "clear_restart",
+          "element": "button",
+          "label": "Apply & Restart",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "restartControls",
             "data": []
           }
         }
@@ -280,7 +432,7 @@
       "description": "Pin configuration for your rotary encoder for menu navigation.",
       "onSave": {
         "type": "controller",
-        "endpoint":"user_interface/teac-dab-controls",
+        "endpoint":"user_interface/retrotuner-ui",
         "method":"saveOptions"
       },
       "saveButton": {
@@ -315,7 +467,7 @@
       "description": "Pin configuration for your 16x2 VFD or LCD display.",
       "onSave": {
         "type": "controller",
-        "endpoint":"user_interface/teac-dab-controls",
+        "endpoint":"user_interface/retrotuner-ui",
         "method":"saveOptions"
       },
       "saveButton": {
@@ -382,7 +534,7 @@
       "description": "Advanced/manual setup. Most users should use 'Configure Buttons (Capture)' above instead. Turn on the switch to edit the raw channel/value mappings by hand. Enter as channel, value (e.g. 0, 12); a range like 0, 24-25 is also allowed.",
       "onSave": {
         "type": "controller",
-        "endpoint":"user_interface/teac-dab-controls",
+        "endpoint":"user_interface/retrotuner-ui",
         "method":"saveOptions"
       },
       "saveButton": {

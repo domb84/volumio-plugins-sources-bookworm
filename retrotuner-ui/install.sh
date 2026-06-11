@@ -5,14 +5,14 @@ set -xe
 #DPKG_ARCH=`dpkg --print-architecture`
 # Then use it to differentiate your install
 
-PLUGIN_DIR="/data/plugins/user_interface/teac-dab-controls"
+PLUGIN_DIR="/data/plugins/user_interface/retrotuner-ui"
 # Keep the venv OUTSIDE the plugin directory. It is created as root during
 # install, and a root-owned subfolder inside the plugin dir prevents Volumio
 # (running as the volumio user) from removing the old folder on update, which
 # makes the update's `mv` fail with "Directory not empty".
-VENV_DIR="/data/teac-dab-controls/venv"
+VENV_DIR="/data/retrotuner-ui/venv"
 
-echo "Installing teac-dab-controls Dependencies"
+echo "Installing retrotuner-ui Dependencies"
 apt-get update
 # System packages: the pigpio daemon, headers for building the native python
 # wheels (RPi.GPIO/spidev/pigpio), and venv support. python3-pip is not needed:
@@ -36,7 +36,7 @@ sed -i "/ExecStart=/c\ExecStart=/usr/bin/pigpiod -t 0" /lib/systemd/system/pigpi
 # https://community.volumio.com/t/update-to-volumio-3-569-breaks-gpio-permission/64095
 sed -i "s/bcm2835-gpiomem/gpiomem/g" /etc/udev/rules.d/99-com.rules
 
-cp "${PLUGIN_DIR}/teac-dab-controls.service" /lib/systemd/system/
+cp "${PLUGIN_DIR}/retrotuner-ui.service" /lib/systemd/system/
 
 systemctl daemon-reload -q
 
