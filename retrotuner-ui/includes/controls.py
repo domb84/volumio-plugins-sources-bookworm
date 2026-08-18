@@ -35,47 +35,6 @@ SPI_CLOCK_HZ = 50000
 # sample. 3 costs ~3ms of a 50ms poll interval, which is not worth optimising.
 SPI_OVERSAMPLE = 3
 
-# Readings this far apart are treated as the same value while waiting for one to
-# settle. normalize_value quantises 1024 raw counts into 32 buckets, so a button
-# whose voltage sits on a bucket edge flickers between adjacent values, which
-# would otherwise restart the debounce window on every poll and never fire.
-# Must stay strictly below the smallest gap between configured values on a
-# channel; warn_close_button_values() reports when that does not hold.
-BUTTON_VALUE_TOLERANCE = 1
-
-
-def _spec_bounds(spec) -> Tuple[int, int]:
-    """Inclusive (low, high) for a parsed button spec; a plain value is a point."""
-    if spec[0] == 'range':
-        return spec[1], spec[2]
-    return spec[1], spec[1]
-
-
-def warn_close_button_values(parsed_btns: List) -> None:
-    """Warn about configured values too close together to tell apart.
-
-    BUTTON_VALUE_TOLERANCE absorbs flicker between adjacent readings, which also
-    means two buttons on one channel within that distance can no longer be
-    distinguished -- the nearer one simply stops responding. Captured values
-    normally sit well apart, but a re-capture can land them adjacent, so surface
-    it here rather than leaving a button silently dead.
-    """
-    for i, (name_a, ch_a, spec_a) in enumerate(parsed_btns):
-        lo_a, hi_a = _spec_bounds(spec_a)
-        for name_b, ch_b, spec_b in parsed_btns[i + 1:]:
-            if ch_a != ch_b:
-                continue
-            lo_b, hi_b = _spec_bounds(spec_b)
-            gap = max(lo_a, lo_b) - min(hi_a, hi_b)
-            # Each side is widened by the tolerance, so they overlap at 2x it.
-            if gap <= 2 * BUTTON_VALUE_TOLERANCE:
-                logger.warning(
-                    "Buttons '%s' and '%s' on channel %s are only %s apart; matching "
-                    "allows +/-%s, so the later one will never fire. Re-capture them "
-                    "further apart.",
-                    name_a, name_b, ch_a, gap, BUTTON_VALUE_TOLERANCE,
-                )
-
 
 def restore_spi0_pinmux() -> None:
     """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
@@ -179,29 +138,23 @@ class Controls:
         data: int,
         parsed_btns: List,
         parsed_skips: List,
-        tolerance: int = 0,
     ) -> Tuple[bool, Optional[str]]:
         """Return (is_skipped, action_name).
 
         is_skipped=True  → value is in a skip range; suppress silently
         action_name=str  → matched button action to fire
         action_name=None → no match found; caller should log a warning
-
-        `tolerance` widens every configured value/range by that much on each
-        side. A button whose voltage sits on a quantisation boundary reads as
-        either of two adjacent values, and which one it settles on is arbitrary,
-        so an exact match would leave it dead roughly half the time.
         """
         for _name, ch, spec in parsed_skips:
             if ch == channel:
-                low, high = _spec_bounds(spec)
-                if low - tolerance <= data <= high + tolerance:
+                if (spec[0] == 'range' and spec[1] <= data <= spec[2]) or \
+                   (spec[0] != 'range' and spec[1] == data):
                     return True, None
 
         for name, ch, spec in parsed_btns:
             if ch == channel:
-                low, high = _spec_bounds(spec)
-                if low - tolerance <= data <= high + tolerance:
+                if (spec[0] == 'range' and spec[1] <= data <= spec[2]) or \
+                   (spec[0] != 'range' and spec[1] == data):
                     return False, name
 
         return False, None
@@ -277,23 +230,15 @@ class Controls:
             state = button_states[channel]
             now = time.monotonic()
 
-            # `last_value` anchors the current stable group: readings within the
-            # tolerance keep the existing anchor rather than becoming the new
-            # value, so a reading flickering across a bucket edge settles once and
-            # then resolves consistently instead of alternating between actions.
-            anchor = state["last_value"]
-            if anchor is None or abs(data - anchor) > BUTTON_VALUE_TOLERANCE:
+            if data != state["last_value"]:
                 state["stable_since"] = now
                 state["last_value"] = data
             elif now - (state["stable_since"] or 0) >= button_debounce_rate:
-                data = anchor
                 if capture:
                     self._handle_capture_reading(channel, data)
                     continue
 
-                skipped, action = self._lookup_button(
-                    channel, data, parsed_btns, parsed_skips, BUTTON_VALUE_TOLERANCE,
-                )
+                skipped, action = self._lookup_button(channel, data, parsed_btns, parsed_skips)
 
                 if skipped:
                     # Value is in a skip range — treat as "released"
@@ -404,7 +349,6 @@ class Controls:
 
         parsed_btns = parse_button_config(btn_config)
         parsed_skips = parse_button_config(btn_skip_config)
-        warn_close_button_values(parsed_btns)
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(CLK, GPIO.OUT)
@@ -473,7 +417,6 @@ class Controls:
 
         parsed_btns = parse_button_config(btn_config)
         parsed_skips = parse_button_config(btn_skip_config)
-        warn_close_button_values(parsed_btns)
 
         cmd_bytes = {ch: [1, (8 + ch) << 4, 0] for ch in channels}
 
