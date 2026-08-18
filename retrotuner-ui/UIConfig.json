@@ -112,9 +112,9 @@
     {
       "id": "button_capture",
       "element": "section",
-      "label": "Configure Buttons (Capture)",
+      "label": "Configure Buttons",
       "icon": "fa-magic",
-      "description": "Easiest way to set up buttons: click 'Configure' for a button, press that physical button on the unit, then press it again to confirm. Use 'Capture Base Resistance' to record the resting value while pressing nothing. Configure as many buttons as you like, then click 'Save & Restart Controls' to apply them all at once. No need to read or type resistance values by hand.",
+      "description": "Each button below shows its current value. To set one: click 'Configure', then press that physical button on the unit twice to confirm. To unmap a button: click its 'Configure', then click 'Clear Selected Button'. If you set a button to a value already used by another, the other is reassigned automatically. Use 'Capture Base Resistance' to record the resting value while pressing nothing. Make all your changes, then click 'Save & Restart Controls' to apply them at once.",
       "content": [
         {
           "id": "capture_btn_enter",
@@ -260,6 +260,17 @@
           }
         },
         {
+          "id": "clear_selected",
+          "element": "button",
+          "label": "Clear Selected Button",
+          "onClick": {
+            "type": "controller",
+            "endpoint": "user_interface/retrotuner-ui",
+            "method": "clearSelectedButton",
+            "data": []
+          }
+        },
+        {
           "id": "capture_save",
           "element": "button",
           "label": "Save & Restart Controls",
@@ -267,158 +278,6 @@
             "type": "controller",
             "endpoint": "user_interface/retrotuner-ui",
             "method": "saveCapture",
-            "data": []
-          }
-        }
-      ]
-    },
-    {
-      "id": "button_clear",
-      "element": "section",
-      "label": "Clear Button Mappings",
-      "icon": "fa-times-circle",
-      "description": "Remove a button's mapping to disable it or free it up for remapping to something else. Clearing a button does not restart the controls — click 'Apply & Restart' at the bottom of this section once you are done.",
-      "content": [
-        {
-          "id": "clear_btn_enter",
-          "element": "button",
-          "label": "Clear Enter",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnEnter",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_radio",
-          "element": "button",
-          "label": "Clear Radio",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnRadio",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_spotify",
-          "element": "button",
-          "label": "Clear Spotify",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnSpotify",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_info",
-          "element": "button",
-          "label": "Clear Info",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnInfo",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_favourite",
-          "element": "button",
-          "label": "Clear Favourite",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnFavourite",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_pause",
-          "element": "button",
-          "label": "Clear Pause/Play",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnPause",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_remove_favourite",
-          "element": "button",
-          "label": "Clear Remove Favourite",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnRemoveFavourite",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_sleep_timer",
-          "element": "button",
-          "label": "Clear Sleep Timer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnSleepTimer",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_cancel_sleep_timer",
-          "element": "button",
-          "label": "Clear Cancel Sleep Timer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnCancelSleepTimer",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_main_menu",
-          "element": "button",
-          "label": "Clear Main Menu",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnMainMenu",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_back",
-          "element": "button",
-          "label": "Clear Back",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnBack",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_btn_dimmer",
-          "element": "button",
-          "label": "Clear Dimmer",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "clearBtnDimmer",
-            "data": []
-          }
-        },
-        {
-          "id": "clear_restart",
-          "element": "button",
-          "label": "Apply & Restart",
-          "onClick": {
-            "type": "controller",
-            "endpoint": "user_interface/retrotuner-ui",
-            "method": "restartControls",
             "data": []
           }
         }

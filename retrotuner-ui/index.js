@@ -80,45 +80,76 @@ retrotunerui.prototype.getUIConfig = function() {
         __dirname + '/i18n/strings_en.json',
         __dirname + '/UIConfig.json')
         .then(function (uiconf) {
-            uiconf.sections[0].content[0].value = self.config.get('spi');
-            uiconf.sections[0].content[1].value = self.config.get('spi_bus');
-            uiconf.sections[0].content[2].value = self.config.get('buttons_clk');
-            uiconf.sections[0].content[3].value = self.config.get('buttons_miso');
-            uiconf.sections[0].content[4].value = self.config.get('buttons_mosi');
-            uiconf.sections[0].content[5].value = self.config.get('buttons_cs');
-            uiconf.sections[0].content[6].value = self.config.get('buttons_channel1');
-            uiconf.sections[0].content[7].value = self.config.get('buttons_channel2');
-            uiconf.sections[0].content[8].value = self.config.get('button_poll_rate');
-            uiconf.sections[0].content[9].value = self.config.get('button_debounce_rate');
-            uiconf.sections[0].content[10].value = self.config.get('button_cooldown_rate');
-            // sections[1] is "Configure Buttons (Capture)" — action buttons, no stored values
-            // sections[2] is "Clear Button Mappings" — action buttons, no stored values
-            uiconf.sections[3].content[0].value = self.config.get('rot_enc_A');
-            uiconf.sections[3].content[1].value = self.config.get('rot_enc_B');
-            uiconf.sections[4].content[0].value = self.config.get('lcd_rs');
-            uiconf.sections[4].content[1].value = self.config.get('lcd_e');
-            uiconf.sections[4].content[2].value = self.config.get('lcd_d4');
-            uiconf.sections[4].content[3].value = self.config.get('lcd_d5');
-            uiconf.sections[4].content[4].value = self.config.get('lcd_d6');
-            uiconf.sections[4].content[5].value = self.config.get('lcd_d7');
-            // sections[5] is the advanced section; content[0] is the "Edit values manually" toggle
-            uiconf.sections[5].content[1].value = self.config.get('btn_enter');
-            uiconf.sections[5].content[2].value = self.config.get('btn_radio');
-            uiconf.sections[5].content[3].value = self.config.get('btn_spotify');
-            uiconf.sections[5].content[4].value = self.config.get('btn_info');
-            uiconf.sections[5].content[5].value = self.config.get('btn_favourite');
-            uiconf.sections[5].content[6].value = self.config.get('btn_main_menu');
-            uiconf.sections[5].content[7].value = self.config.get('btn_back');
-            uiconf.sections[5].content[8].value = self.config.get('btn_no_press_channel1');
-            uiconf.sections[5].content[9].value = self.config.get('btn_no_press_channel2');
-            uiconf.sections[5].content[10].value = self.config.get('btn_pause');
-            uiconf.sections[5].content[11].value = self.config.get('btn_remove_favourite');
-            uiconf.sections[5].content[12].value = self.config.get('btn_sleep_timer');
-            uiconf.sections[5].content[13].value = self.config.get('btn_cancel_sleep_timer');
-            uiconf.sections[5].content[14].value = self.config.get('btn_dimmer');
+            // Look sections and content up by id, not numeric index, so adding or
+            // reordering sections can never silently shift indices (which has
+            // broken this page before).
+            function section(id) {
+                return uiconf.sections.find(function (s) { return s.id === id; });
+            }
+            function setValue(sec, contentId, value) {
+                if (!sec) { return; }
+                const item = sec.content.find(function (c) { return c.id === contentId; });
+                if (item) { item.value = value; }
+            }
+
+            const pins = section('buttons');
+            setValue(pins, 'spi', self.config.get('spi'));
+            setValue(pins, 'spi_bus', self.config.get('spi_bus'));
+            setValue(pins, 'buttons_clk', self.config.get('buttons_clk'));
+            setValue(pins, 'buttons_miso', self.config.get('buttons_miso'));
+            setValue(pins, 'buttons_mosi', self.config.get('buttons_mosi'));
+            setValue(pins, 'buttons_cs', self.config.get('buttons_cs'));
+            setValue(pins, 'buttons_channel1', self.config.get('buttons_channel1'));
+            setValue(pins, 'buttons_channel2', self.config.get('buttons_channel2'));
+            setValue(pins, 'button_poll_rate', self.config.get('button_poll_rate'));
+            setValue(pins, 'button_debounce_rate', self.config.get('button_debounce_rate'));
+            setValue(pins, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
+
+            // Capture section: action buttons have no stored values, but we
+            // rewrite each "Configure" label to show its current mapping so the
+            // user can see what's set without opening the Advanced section.
+            const capture = section('button_capture');
+            if (capture) {
+                capture.content.forEach(function (item) {
+                    if (item.id && item.id.indexOf('capture_btn_') === 0) {
+                        const key = item.id.slice('capture_'.length);  // capture_btn_x -> btn_x
+                        const friendly = CAPTURE_LABELS[key] || key;
+                        const val = self.config.get(key);
+                        item.label = 'Configure ' + friendly + (val ? ' (now: ' + val + ')' : ' (unmapped)');
+                    }
+                });
+            }
+
+            const encoder = section('encoder');
+            setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
+            setValue(encoder, 'rot_enc_B', self.config.get('rot_enc_B'));
+
+            const lcd = section('lcd');
+            setValue(lcd, 'lcd_rs', self.config.get('lcd_rs'));
+            setValue(lcd, 'lcd_e', self.config.get('lcd_e'));
+            setValue(lcd, 'lcd_d4', self.config.get('lcd_d4'));
+            setValue(lcd, 'lcd_d5', self.config.get('lcd_d5'));
+            setValue(lcd, 'lcd_d6', self.config.get('lcd_d6'));
+            setValue(lcd, 'lcd_d7', self.config.get('lcd_d7'));
+
+            const advanced = section('button_resistance');
+            setValue(advanced, 'btn_enter', self.config.get('btn_enter'));
+            setValue(advanced, 'btn_radio', self.config.get('btn_radio'));
+            setValue(advanced, 'btn_spotify', self.config.get('btn_spotify'));
+            setValue(advanced, 'btn_info', self.config.get('btn_info'));
+            setValue(advanced, 'btn_favourite', self.config.get('btn_favourite'));
+            setValue(advanced, 'btn_main_menu', self.config.get('btn_main_menu'));
+            setValue(advanced, 'btn_back', self.config.get('btn_back'));
+            setValue(advanced, 'btn_no_press_channel1', self.config.get('btn_no_press_channel1'));
+            setValue(advanced, 'btn_no_press_channel2', self.config.get('btn_no_press_channel2'));
+            setValue(advanced, 'btn_pause', self.config.get('btn_pause'));
+            setValue(advanced, 'btn_remove_favourite', self.config.get('btn_remove_favourite'));
+            setValue(advanced, 'btn_sleep_timer', self.config.get('btn_sleep_timer'));
+            setValue(advanced, 'btn_cancel_sleep_timer', self.config.get('btn_cancel_sleep_timer'));
+            setValue(advanced, 'btn_dimmer', self.config.get('btn_dimmer'));
             defer.resolve(uiconf);
         })
-        .fail(function () {
+        .fail(function (error) {
             self.logger.error('RetroTuner UI - Failed to parse UI Configuration page:' + error);
             defer.reject(new Error());
         });
@@ -251,44 +282,33 @@ retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 
-// Clear entry points — one per button, same pattern as capture entry points
-retrotunerui.prototype.clearBtnEnter             = function () { return this.clearButton('btn_enter'); };
-retrotunerui.prototype.clearBtnRadio             = function () { return this.clearButton('btn_radio'); };
-retrotunerui.prototype.clearBtnSpotify           = function () { return this.clearButton('btn_spotify'); };
-retrotunerui.prototype.clearBtnInfo              = function () { return this.clearButton('btn_info'); };
-retrotunerui.prototype.clearBtnFavourite         = function () { return this.clearButton('btn_favourite'); };
-retrotunerui.prototype.clearBtnPause             = function () { return this.clearButton('btn_pause'); };
-retrotunerui.prototype.clearBtnRemoveFavourite   = function () { return this.clearButton('btn_remove_favourite'); };
-retrotunerui.prototype.clearBtnSleepTimer        = function () { return this.clearButton('btn_sleep_timer'); };
-retrotunerui.prototype.clearBtnCancelSleepTimer  = function () { return this.clearButton('btn_cancel_sleep_timer'); };
-retrotunerui.prototype.clearBtnMainMenu          = function () { return this.clearButton('btn_main_menu'); };
-retrotunerui.prototype.clearBtnBack              = function () { return this.clearButton('btn_back'); };
-retrotunerui.prototype.clearBtnDimmer            = function () { return this.clearButton('btn_dimmer'); };
-
-retrotunerui.prototype.clearButton = function (key) {
+// Clear the button currently selected for capture. Clearing is folded into the
+// same staged session as capturing, so a single "Save & Restart Controls"
+// applies both. The user chooses which button by clicking its "Configure"
+// button first, then clicks "Clear Selected Button" instead of pressing it.
+retrotunerui.prototype.clearSelectedButton = function () {
     const self = this;
-    const label = CAPTURE_LABELS[key];
-    if (!label) {
-        self.logger.error('RetroTuner UI - clearButton: unknown key ' + key);
+    const session = self._captureSession;
+    if (!session || !session.target) {
+        self.commandRouter.pushToastMessage('info', 'Button Capture',
+            'First click a "Configure" button to choose which button to clear, then click "Clear Selected Button".');
         return libQ.resolve();
     }
-    self.config.set(key, '');
-    // Remove from any in-progress capture session so saveCapture won't re-apply it.
-    if (self._capturedValues && label in self._capturedValues) {
-        delete self._capturedValues[label];
-    }
-    self.logger.info('RetroTuner UI - cleared mapping for ' + label);
-    self.commandRouter.pushToastMessage('success', 'RetroTuner UI',
-        '"' + label + '" cleared. Click "Apply & Restart" to activate.');
-    return libQ.resolve();
-};
 
-retrotunerui.prototype.restartControls = function () {
-    const self = this;
-    if (self._checkButtonConflicts()) {
-        self.commandRouter.pushToastMessage('info', 'RetroTuner UI', 'Restarting controls...');
-        self.onRestart();
-    }
+    const key = session.target;
+    const label = session.label;
+    self.config.set(key, '');
+    if (!self._capturedValues) { self._capturedValues = {}; }
+    self._capturedValues[label] = 'cleared';
+    self.logger.info('RetroTuner UI - cleared mapping for ' + label);
+
+    // Deselect so a stray press can't re-capture the button we just cleared.
+    session.target = null;
+    session.candidate = null;
+    session.deadline = Date.now() + CAPTURE_IDLE_TIMEOUT_MS;
+
+    self.commandRouter.pushToastMessage('success', 'Button Capture',
+        '"' + label + '" cleared. Configure another button, or click "Save & Restart Controls".');
     return libQ.resolve();
 };
 
@@ -327,7 +347,7 @@ retrotunerui.prototype.startCapture = function (targetKey) {
     self._captureSession.deadline = Date.now() + CAPTURE_IDLE_TIMEOUT_MS;
 
     self.commandRouter.pushToastMessage('info', 'Button Capture',
-        'Controls paused. Press the "' + label + '" button on the unit...');
+        'Controls paused. Press the "' + label + '" button on the unit, or click "Clear Selected Button" to unmap it.');
     return libQ.resolve();
 };
 
@@ -372,11 +392,26 @@ retrotunerui.prototype.pollCapture = function () {
 
     if (session.candidate.channel === ch && session.candidate.value === val) {
         const configValue = ch + ', ' + val;
-        self.config.set(session.target, configValue);
         if (!self._capturedValues) { self._capturedValues = {}; }
+
+        // Auto-reassign: if this value already belongs to other actions, clear
+        // them so the physical button now triggers only the action just learnt.
+        const displaced = self._findConflictingButtons(session.target, ch, val);
+        displaced.forEach(function (other) {
+            self.config.set(other.key, '');
+            self._capturedValues[other.label] = 'cleared';
+        });
+
+        self.config.set(session.target, configValue);
         self._capturedValues[session.label] = configValue;
-        self.commandRouter.pushToastMessage('success', 'Button Capture',
-            'Captured "' + session.label + '" = ' + configValue + '. Configure another button, or click "Save & Restart Controls".');
+
+        let msg = 'Captured "' + session.label + '" = ' + configValue + '.';
+        if (displaced.length > 0) {
+            msg += ' Reassigned from ' + displaced.map(function (d) { return '"' + d.label + '"'; }).join(', ') + '.';
+        }
+        msg += ' Configure another button, or click "Save & Restart Controls".';
+        self.commandRouter.pushToastMessage(displaced.length > 0 ? 'warning' : 'success', 'Button Capture', msg);
+
         // Stay in the session (controls remain paused); wait for the next button.
         session.target = null;
         session.candidate = null;
@@ -485,6 +520,20 @@ retrotunerui.prototype.saveCapture = function () {
         'Saved (' + summary + '). Restarting controls...');
     self.onRestart();
     return libQ.resolve();
+};
+
+// Returns [{key, label}] of OTHER buttons whose current mapping overlaps the
+// given channel/value — used to auto-reassign on capture.
+retrotunerui.prototype._findConflictingButtons = function (targetKey, channel, value) {
+    const self = this;
+    const candidate = { channel: channel, type: 'value', value: value };
+    return Object.keys(CAPTURE_LABELS)
+        .filter(function (key) { return key !== targetKey; })
+        .map(function (key) {
+            return { key: key, label: CAPTURE_LABELS[key], parsed: parseButtonMapping(self.config.get(key)) };
+        })
+        .filter(function (m) { return m.parsed !== null && mappingsOverlap(candidate, m.parsed); })
+        .map(function (m) { return { key: m.key, label: m.label }; });
 };
 
 // Returns true if no conflicts exist; false and fires an error toast if any are found.
