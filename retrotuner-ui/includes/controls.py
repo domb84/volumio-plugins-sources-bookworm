@@ -374,13 +374,13 @@ class Controls:
         cmd_bytes = {ch: [1, (8 + ch) << 4, 0] for ch in channels}
 
         def _read_all_channels_spi(ch_list):
-            GPIO.output(butCS, GPIO.LOW)
             results = []
             for ch in ch_list:
+                GPIO.output(butCS, GPIO.LOW)
                 adc_data = spi.xfer2(cmd_bytes[ch])
+                GPIO.output(butCS, GPIO.HIGH)
                 adc_value = ((adc_data[1] & 3) << 8) | adc_data[2]
                 results.append(adc_value)
-            GPIO.output(butCS, GPIO.HIGH)
             return results
 
         while not (self.stop_event and self.stop_event.is_set()):
