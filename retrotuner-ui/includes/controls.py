@@ -348,6 +348,7 @@ class Controls:
     def buttons_spi(self, spi_bus, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate=10, button_debounce_rate=50, button_cooldown_rate=500):
         spi = spidev.SpiDev()
         spi.open(0, spi_bus)
+        spi.no_cs = True  # butCS is driven manually below; don't let the kernel also toggle CE0/CE1
         spi.max_speed_hz = 1000000
 
         GPIO.setmode(GPIO.BCM)
