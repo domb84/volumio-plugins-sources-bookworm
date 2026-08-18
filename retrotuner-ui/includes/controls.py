@@ -35,18 +35,12 @@ SPI_CLOCK_HZ = 50000
 # sample. 3 costs ~3ms of a 50ms poll interval, which is not worth optimising.
 SPI_OVERSAMPLE = 3
 
-# Buckets the raw 10-bit reading is quantised into. This is the scale captured
-# button values are expressed in, so changing it invalidates existing configs.
-# 64 puts one bucket at 16 raw counts: fine enough that a +/-1 tolerance stays
-# well inside the ~32-64 raw counts separating adjacent buttons on the ladder,
-# coarse enough that the tolerance still swallows the boundary flicker.
-BUTTON_VALUE_RESOLUTION = 64
-
 # Readings this far apart are treated as the same value while waiting for one to
-# settle. A button whose voltage sits on a bucket edge flickers between adjacent
-# values, which would otherwise restart the debounce window on every poll and
-# never fire. Must stay strictly below half the smallest gap between configured
-# values on a channel; warn_close_button_values() reports when that fails.
+# settle. normalize_value quantises 1024 raw counts into 32 buckets, so a button
+# whose voltage sits on a bucket edge flickers between adjacent values, which
+# would otherwise restart the debounce window on every poll and never fire.
+# Must stay strictly below the smallest gap between configured values on a
+# channel; warn_close_button_values() reports when that does not hold.
 BUTTON_VALUE_TOLERANCE = 1
 
 
@@ -279,7 +273,7 @@ class Controls:
         is suppressed so pressing buttons doesn't navigate the menu.
         """
         for data, channel in zip(batch_data, channels):
-            data = self.normalize_value(data, 0, 1024, BUTTON_VALUE_RESOLUTION)
+            data = self.normalize_value(data, 0, 1024, 32)
             state = button_states[channel]
             now = time.monotonic()
 
@@ -501,13 +495,13 @@ class Controls:
             return results
 
         # A pinmux that never took leaves MISO dead, so every raw reading is 0 --
-        # which normalize_value inverts into a pegged full-scale value, looking
-        # like a button permanently held down rather than an obviously broken read.
+        # which normalize_value inverts into a pegged 32, looking like a button
+        # permanently held down rather than an obviously broken read.
         if not any(_read_all_channels_spi(channels)):
             logger.warning(
-                "Initial SPI read was raw 0 on every channel (shows as a pegged %s once "
+                "Initial SPI read was raw 0 on every channel (shows as a pegged 32 once "
                 "normalised); the MCP3008 may not be reachable. Check `raspi-gpio get %s` "
-                "reports func=ALT0.", BUTTON_VALUE_RESOLUTION, SPI0_PINS,
+                "reports func=ALT0.", SPI0_PINS,
             )
 
         while not (self.stop_event and self.stop_event.is_set()):
