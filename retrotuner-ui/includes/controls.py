@@ -24,6 +24,13 @@ CAPTURE_BASELINE_PATH = "/tmp/retrotuner-ui-capture-baseline.json"
 # selects SPI0, so they are fixed regardless of the configured pin numbers.
 SPI0_PINS = "9,10,11"
 
+# The MCP3008 charges its sample-and-hold cap through the resistor ladder during
+# a window of only 1.5 clock cycles. At 1MHz that is 1.5us, which only settles a
+# source impedance up to ~7k -- marginal for a button ladder, so readings drifted
+# across bucket boundaries. 50kHz gives a 30us window (good for ~200k) and costs
+# under 1ms per two-channel poll against a 50ms poll interval.
+SPI_CLOCK_HZ = 50000
+
 
 def restore_spi0_pinmux() -> None:
     """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
@@ -385,7 +392,7 @@ class Controls:
         spi = spidev.SpiDev()
         spi.open(0, spi_bus)
         spi.no_cs = True  # butCS is driven manually below; don't let the kernel also toggle CE0/CE1
-        spi.max_speed_hz = 1000000
+        spi.max_speed_hz = SPI_CLOCK_HZ
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(butCS, GPIO.OUT)
