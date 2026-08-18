@@ -377,7 +377,7 @@ class Controls:
             results = []
             for ch in ch_list:
                 GPIO.output(butCS, GPIO.LOW)
-                adc_data = spi.xfer2(cmd_bytes[ch])
+                adc_data = spi.xfer2(list(cmd_bytes[ch]))
                 GPIO.output(butCS, GPIO.HIGH)
                 adc_value = ((adc_data[1] & 3) << 8) | adc_data[2]
                 results.append(adc_value)
