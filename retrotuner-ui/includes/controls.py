@@ -3,6 +3,7 @@ import pigpio
 import spidev
 import json
 import os
+import subprocess
 import threading
 import time
 import logging
@@ -18,6 +19,39 @@ from .utils import parse_button_config
 CAPTURE_FLAG_PATH = "/tmp/retrotuner-ui-capture-on"
 CAPTURE_READING_PATH = "/tmp/retrotuner-ui-capture.json"
 CAPTURE_BASELINE_PATH = "/tmp/retrotuner-ui-capture-baseline.json"
+
+# Hardware SPI0 always lives on these BCM pins, and `spi.open(0, ...)` always
+# selects SPI0, so they are fixed regardless of the configured pin numbers.
+SPI0_PINS = "9,10,11"
+
+
+def restore_spi0_pinmux() -> None:
+    """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
+
+    Bitbang mode claims GPIO9/10/11 as plain input/output via RPi.GPIO, which
+    clobbers their ALT0 function directly in the pin function-select registers.
+    Nothing puts it back: GPIO.cleanup() leaves them as plain inputs, and the
+    pinctrl mux is only applied when the SPI driver probes at boot. So switching
+    from software to SPI mode without a reboot leaves the SPI peripheral
+    disconnected from the pins and every read returns 0.
+
+    raspi-gpio is the only way to set an alt function -- RPi.GPIO has no API for
+    it. Setting alt functions needs root and the service runs as `volumio`, so
+    this goes via sudo (passwordless on Volumio). Re-asserting is idempotent and
+    harmless when the pins are already correct.
+    """
+    try:
+        subprocess.run(
+            ["sudo", "-n", "raspi-gpio", "set", SPI0_PINS, "a0"],
+            check=True, capture_output=True,
+        )
+        logger.debug("Re-asserted ALT0 on SPI0 pins %s", SPI0_PINS)
+    except Exception as e:
+        logger.warning(
+            "Could not re-assert ALT0 on SPI0 pins (%s). If button reads come back "
+            "as a constant value, run `sudo raspi-gpio set %s a0` or reboot.", e, SPI0_PINS,
+        )
+
 
 @dataclass
 class ControlsConfig:
@@ -346,6 +380,8 @@ class Controls:
         logger.info('Buttons (bitbang) stopping')
 
     def buttons_spi(self, spi_bus, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate=10, button_debounce_rate=50, button_cooldown_rate=500):
+        restore_spi0_pinmux()
+
         spi = spidev.SpiDev()
         spi.open(0, spi_bus)
         spi.no_cs = True  # butCS is driven manually below; don't let the kernel also toggle CE0/CE1
@@ -382,6 +418,16 @@ class Controls:
                 adc_value = ((adc_data[1] & 3) << 8) | adc_data[2]
                 results.append(adc_value)
             return results
+
+        # A pinmux that never took leaves MISO dead, so every raw reading is 0 --
+        # which normalize_value inverts into a pegged 32, looking like a button
+        # permanently held down rather than an obviously broken read.
+        if not any(_read_all_channels_spi(channels)):
+            logger.warning(
+                "Initial SPI read was raw 0 on every channel (shows as a pegged 32 once "
+                "normalised); the MCP3008 may not be reachable. Check `raspi-gpio get %s` "
+                "reports func=ALT0.", SPI0_PINS,
+            )
 
         while not (self.stop_event and self.stop_event.is_set()):
             batch_data = _read_all_channels_spi(channels)
