@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from includes.controls import Controls
+from includes.controls import Controls, warn_close_button_values
 
 
 def _bare_controls():
@@ -252,3 +252,110 @@ class TestProcessReadings:
             )
         assert c.controlQ.empty()
         c._handle_capture_reading.assert_called_once_with(self.CHANNEL, self.BTN_VALUE)
+
+
+class TestValueFlickerTolerance:
+    """A reading sitting on a bucket edge alternates between adjacent values.
+
+    Unlike TestProcessReadings these do not pre-prime `last_value`, so the
+    stability/anchoring logic in _process_readings actually runs.
+    """
+
+    CHANNEL = 0
+    SKIP_VALUE = 16   # resting / no-press
+    BTN_VALUE = 12    # the press value
+    FLICKER = 13      # same press, one bucket over
+
+    def _controls(self):
+        c = Controls.__new__(Controls)
+        c.controlQ = queue.Queue()
+        return c
+
+    def _fresh_states(self):
+        return {
+            self.CHANNEL: {
+                "last_value": None, "stable_since": None, "last_sent": 0.0,
+                "btn_state": "idle", "press_action": None, "press_start": None,
+                "long_press_fired": False,
+            }
+        }
+
+    def _feed(self, c, states, *values):
+        """Push readings through the real stability path, one poll per value."""
+        with patch.object(c, 'normalize_value', side_effect=lambda v, *_: v):
+            for value in values:
+                c._process_readings(
+                    [value], [self.CHANNEL], states,
+                    [("btn_pause", self.CHANNEL, ("value", self.BTN_VALUE))],
+                    [("rest", self.CHANNEL, ("value", self.SKIP_VALUE))],
+                    button_debounce_rate=0.0, button_cooldown_rate=0.0,
+                    long_press_threshold=60.0,  # never long-press in these tests
+                )
+
+    def test_flicker_across_bucket_edge_still_registers_press(self):
+        c = self._controls()
+        states = self._fresh_states()
+        self._feed(c, states, self.BTN_VALUE, self.FLICKER, self.BTN_VALUE)
+        assert states[self.CHANNEL]["btn_state"] == "pressed"
+        assert states[self.CHANNEL]["press_action"] == "btn_pause"
+
+    def test_unconfigured_side_of_boundary_still_resolves(self):
+        c = self._controls()
+        states = self._fresh_states()
+        # Which side of the edge the reading settles on is arbitrary. 13 is not
+        # configured, but is within tolerance of 12, so it must still fire rather
+        # than leaving the button dead half the time.
+        self._feed(c, states, self.FLICKER, self.FLICKER)
+        assert states[self.CHANNEL]["press_action"] == "btn_pause"
+
+    def test_flickering_press_fires_once_on_release(self):
+        c = self._controls()
+        states = self._fresh_states()
+        self._feed(c, states, self.BTN_VALUE, self.FLICKER, self.BTN_VALUE)
+        self._feed(c, states, self.SKIP_VALUE, self.SKIP_VALUE)  # release
+        assert c.controlQ.get_nowait() == {"control": "btn_pause"}
+        assert c.controlQ.empty()
+
+    def test_value_beyond_tolerance_restarts_stability_window(self):
+        c = self._controls()
+        states = self._fresh_states()
+        self._feed(c, states, self.BTN_VALUE, self.SKIP_VALUE)
+        # 16 is 4 away from 12, so it re-anchors rather than being absorbed.
+        assert states[self.CHANNEL]["last_value"] == self.SKIP_VALUE
+
+
+class TestLookupButtonTolerance:
+    def test_tolerance_matches_adjacent_value(self):
+        btns = [("btn_a", 0, ("value", 12))]
+        assert Controls._lookup_button(0, 13, btns, [], 1) == (False, "btn_a")
+        assert Controls._lookup_button(0, 11, btns, [], 1) == (False, "btn_a")
+
+    def test_tolerance_does_not_reach_further(self):
+        btns = [("btn_a", 0, ("value", 12))]
+        assert Controls._lookup_button(0, 14, btns, [], 1) == (False, None)
+
+    def test_tolerance_widens_range_edges(self):
+        btns = [("btn_a", 0, ("range", 24, 25))]
+        assert Controls._lookup_button(0, 26, btns, [], 1) == (False, "btn_a")
+        assert Controls._lookup_button(0, 23, btns, [], 1) == (False, "btn_a")
+
+    def test_default_tolerance_is_exact(self):
+        btns = [("btn_a", 0, ("value", 12))]
+        assert Controls._lookup_button(0, 13, btns, []) == (False, None)
+
+
+class TestWarnCloseButtonValues:
+    def test_warns_when_within_two_tolerances(self, caplog):
+        btns = [("btn_a", 0, ("value", 12)), ("btn_b", 0, ("value", 13))]
+        warn_close_button_values(btns)
+        assert "btn_a" in caplog.text and "btn_b" in caplog.text
+
+    def test_silent_when_well_separated(self, caplog):
+        btns = [("btn_a", 0, ("value", 12)), ("btn_b", 0, ("value", 20))]
+        warn_close_button_values(btns)
+        assert caplog.text == ""
+
+    def test_same_value_on_different_channels_is_fine(self, caplog):
+        btns = [("btn_a", 0, ("value", 12)), ("btn_b", 1, ("value", 12))]
+        warn_close_button_values(btns)
+        assert caplog.text == ""
