@@ -1,6 +1,6 @@
 /*--------------------
-// FusionDsp plugin for volumio 4. By balbuze June 2026
-Camilladsp v4.1.0
+// FusionDsp plugin for volumio 4. By balbuze August 2026
+Camilladsp v4.1.3
 contribution : Nerd, Paolo Sabatino, squadgazzz
 Multi Dsp features
 Based on CamillaDsp
@@ -371,6 +371,10 @@ FusionDsp.prototype.getUIConfig = function () {
         // Section 9: Tools
         configureTools(self, uiconf);
 
+        // Section 10: VeryAdvSet
+        configureVeryAdvSet(self, uiconf);
+
+
         defer.resolve(uiconf);
       } catch (e) {
         self.logger.error(logPrefix + 'Error: ' + e);
@@ -634,16 +638,15 @@ function configureEq15Section(self, uiconf, selectedsp) {
   const eqtext = selectedsp === 'EQ15'
     ? self.commandRouter.getI18nString('LANDRCHAN')
     : `${self.commandRouter.getI18nString('LEFTCHAN')},${self.commandRouter.getI18nString('RIGHTCHAN')}`;
+  uiconf.sections[1].content.push({
+    id: 'showpeqcurve',
+    element: 'button',
+    label: self.commandRouter.getI18nString('SHOW_PEQ_CURVE'),
+    doc: self.commandRouter.getI18nString('SHOW_PEQ_CURVE_DOC'),
+    onClick: { type: 'openUrl', url: `http://${IPaddress}:10015` }
 
-        uiconf.sections[1].content.push({
-      id: 'showpeqcurve',
-      element: 'button',
-      label: self.commandRouter.getI18nString('SHOW_PEQ_CURVE'),
-      doc: self.commandRouter.getI18nString('SHOW_PEQ_CURVE_DOC'),
-      onClick: { type: 'openUrl', url: `http://${IPaddress}:10015` }
-
-      // visibleIf: { field: 'showeq', value: true }
-    });
+    // visibleIf: { field: 'showeq', value: true }
+  });
 
   listeq.forEach((eq, i) => {
     const neq = eqtext.split(',')[i];
@@ -660,17 +663,17 @@ function configureEq15Section(self, uiconf, selectedsp) {
       tooltip: 'show',
       muted: mutedBands[idx] === '1'
     }));
-/*
-    uiconf.sections[1].content.push({
-      id: 'showpeqcurve',
-      element: 'button',
-      label: self.commandRouter.getI18nString('SHOW_PEQ_CURVE'),
-      doc: self.commandRouter.getI18nString('SHOW_PEQ_CURVE_DOC'),
-      onClick: { type: 'openUrl', url: `http://${IPaddress}:10015` }
-
-      // visibleIf: { field: 'showeq', value: true }
-    });
-    */
+    /*
+        uiconf.sections[1].content.push({
+          id: 'showpeqcurve',
+          element: 'button',
+          label: self.commandRouter.getI18nString('SHOW_PEQ_CURVE'),
+          doc: self.commandRouter.getI18nString('SHOW_PEQ_CURVE_DOC'),
+          onClick: { type: 'openUrl', url: `http://${IPaddress}:10015` }
+    
+          // visibleIf: { field: 'showeq', value: true }
+        });
+        */
     uiconf.sections[1].content.push({
       id: eq,
       element: 'equalizer',
@@ -709,7 +712,7 @@ function configureEq15Section(self, uiconf, selectedsp) {
 }
 
 function configureEq3Section(self, uiconf) {
-  for (let i = 2; i <= 11; i++) uiconf.sections[i].hidden = true;
+  for (let i = 2; i <= 12; i++) uiconf.sections[i].hidden = true;
 
   const geq3 = self.config.get('geq3').split(',');
   const mutedBands = (self.config.get('geq3mute') || '0,0,0').split(',');
@@ -876,6 +879,8 @@ function configureMoreSettings(self, uiconf, selectedsp, effect) {
 }
 
 function configureAdvancedSettings(self, uiconf, selectedsp) {
+
+
   const controls = [
     ...(selectedsp !== 'convfir' ? [{
       id: 'autoatt',
@@ -890,7 +895,9 @@ function configureAdvancedSettings(self, uiconf, selectedsp) {
     { id: 'permutchannel', element: 'switch', doc: self.commandRouter.getI18nString('PERMUT_CHANNEL_DOC'), label: self.commandRouter.getI18nString('PERMUT_CHANNEL'), value: self.config.get('permutchannel'), visibleIf: { field: 'showeq', value: true } },
     { id: 'muteleft', element: 'switch', doc: self.commandRouter.getI18nString('MUTE_LEFT_DOC'), label: self.commandRouter.getI18nString('MUTE_LEFT'), value: self.config.get('muteleft'), visibleIf: { field: 'showeq', value: true } },
     { id: 'muteright', element: 'switch', doc: self.commandRouter.getI18nString('MUTE_RIGHT_DOC'), label: self.commandRouter.getI18nString('MUTE_RIGHT'), value: self.config.get('muteright'), visibleIf: { field: 'showeq', value: true } },
-    { id: 'crossfeed', element: 'select', doc: self.commandRouter.getI18nString('CROSSFEED_DOC'), label: self.commandRouter.getI18nString('CROSSFEED'), value: getCrossfeedValue(self), options: getCrossfeedOptions(), visibleIf: { field: 'showeq', value: true } }
+    { id: 'crossfeed', element: 'select', doc: self.commandRouter.getI18nString('CROSSFEED_DOC'), label: self.commandRouter.getI18nString('CROSSFEED'), value: getCrossfeedValue(self), options: getCrossfeedOptions(), visibleIf: { field: 'showeq', value: true } },
+    { id: 'crosstalkstrength', element: 'equalizer', label: self.commandRouter.getI18nString('CROSSTALK_STRENGTH'), doc: self.commandRouter.getI18nString('CROSSTALK_STRENGTH_DOC'), visibleIf: { field: 'crossfeed', value: 'cross_talk-can' }, config: { orientation: 'horizontal', bars: [{ value: getCrossfeedStrength(self), ticks: [0, 1, 2], ticksLabels: ['Large---->Extra large', 'Very Large', 'Extra Large'], tooltip: 'hide' }] } }
+
   ];
 
   if (self.config.get('showloudness')) {
@@ -898,7 +905,7 @@ function configureAdvancedSettings(self, uiconf, selectedsp) {
       { id: 'loudness', element: 'switch', doc: self.commandRouter.getI18nString('LOUDNESS_DOC'), label: self.commandRouter.getI18nString('LOUDNESS'), value: self.config.get('loudness'), visibleIf: { field: 'showeq', value: true } },
       { id: 'loudnessthreshold', element: 'equalizer', label: self.commandRouter.getI18nString('LOUDNESS_THRESHOLD'), doc: self.commandRouter.getI18nString('LOUDNESS_THRESHOLD_DOC'), visibleIf: { field: 'showeq', value: true }, config: { orientation: 'horizontal', bars: [{ min: 10, max: 100, step: '1', value: self.config.get('loudnessthreshold'), ticksLabels: ['%'], tooltip: 'always' }] } },
       //{ id: 'loudnessstrength', element: 'equalizer', label: self.commandRouter.getI18nString('LOUDNESS_STRENGTH'), doc: self.commandRouter.getI18nString('LOUDNESS_STRENGTH_DOC'), visibleIf: { field: 'showeq', value: true }, config: { orientation: 'horizontal', bars: [{ min: 0, max: 2, step: '1', value: self.config.get('loudnessstrength'), ticks: [0, 1, 2], ticksLabels: ['Min', 'Medium', 'Max'], tooltip: 'show' }] } }
-      { id: 'loudnessstrength', element: 'equalizer', label: self.commandRouter.getI18nString('LOUDNESS_STRENGTH'), doc: self.commandRouter.getI18nString('LOUDNESS_STRENGTH_DOC'), visibleIf: { field: 'showeq', value: true }, config: { orientation: 'horizontal', bars: [{ value: self.config.get('loudnessstrength'), ticks: [0, 1, 2,3], ticksLabels: ['Min','Low', 'Medium', 'Max'], tooltip: 'hide' }] } }
+      { id: 'loudnessstrength', element: 'equalizer', label: self.commandRouter.getI18nString('LOUDNESS_STRENGTH'), doc: self.commandRouter.getI18nString('LOUDNESS_STRENGTH_DOC'), visibleIf: { field: 'showeq', value: true }, config: { orientation: 'horizontal', bars: [{ value: self.config.get('loudnessstrength'), ticks: [0, 1, 2, 3], ticksLabels: ['Min', 'Low', 'Medium', 'Max'], tooltip: 'hide' }] } }
 
     );
   }
@@ -908,9 +915,13 @@ function configureAdvancedSettings(self, uiconf, selectedsp) {
 }
 
 function getCrossfeedValue(self) {
-  const crossconfig = self.config.get('crossfeed');
+  let crossconfig = self.config.get('crossfeed');
+  if (Array.isArray(crossconfig)) {
+    crossconfig = crossconfig[0];
+  }
   const labels = {
     'None': 'None',
+    '-------headphone-----': '-------headphone-----',
     'bauer': 'Bauer 700Hz/4.5dB',
     'chumoy': 'Chu Moy 700Hz/6dB',
     'jameier': 'Jan Meier 650Hz/9.5dB',
@@ -918,14 +929,31 @@ function getCrossfeedValue(self) {
     'nc_11_30': 'Natural Crossfeed 1.1, 30 deg',
     'nc_11_50': 'Natural Crossfeed 1.1, 50 deg',
     'sadie_d1': 'SADIE D1 HRTF (KU100 Dummy Head)',
-    'sadie_h15m': 'SADIE H15m HRTF (Human Subject)'
+    'sadie_h15m': 'SADIE H15m HRTF (Human Subject)',
+    '-------speakers-----': '-------speakers-----',
+    'cross_talk-can': 'Cross Talk-Cancellation'
+
   };
   return { value: crossconfig, label: labels[crossconfig] || 'None' };
+}
+
+function isCrossfeedCrossTalkCan(self) {
+  const crossconfig = self.config.get('crossfeed');
+  return Array.isArray(crossconfig) ? crossconfig[0] === 'cross_talk-can' : crossconfig === 'cross_talk-can';
+}
+
+function getCrossfeedStrength(self) {
+  const crossconfig = self.config.get('crossfeed');
+  if (Array.isArray(crossconfig)) {
+    return crossconfig[1] ?? 0;
+  }
+  return self.config.get('crosstalkstrength') ?? 0;
 }
 
 function getCrossfeedOptions() {
   return [
     { value: 'None', label: 'None' },
+    { value: '-------headphone-----', label: '-------headphone-----' },
     { value: 'bauer', label: 'Bauer 700Hz/4.5dB' },
     { value: 'chumoy', label: 'Chu Moy 700Hz/6dB' },
     { value: 'jameier', label: 'Jan Meier 650Hz/9.5dB' },
@@ -933,7 +961,9 @@ function getCrossfeedOptions() {
     { value: 'nc_11_30', label: 'Natural Crossfeed 1.1, 30 deg' },
     { value: 'nc_11_50', label: 'Natural Crossfeed 1.1, 50 deg' },
     { value: 'sadie_d1', label: 'SADIE D1 HRTF (KU100 Dummy Head)' },
-    { value: 'sadie_h15m', label: 'SADIE H15m HRTF (Human Subject)' }
+    { value: 'sadie_h15m', label: 'SADIE H15m HRTF (Human Subject)' },
+    { value: '-------speakers-----', label: '-------speakers-----' },
+    { value: 'cross_talk-can', label: 'Cross Talk-Cancellation' }
   ];
 }
 
@@ -994,7 +1024,7 @@ function configureFinalSettings(self, uiconf) {
     value: self.config.get('showeq')
   });
 
-  const saveData = ['autoatt', 'leftlevel', 'rightlevel', 'crossfeed', 'monooutput', 'muteleft', 'muteright', 'permutchannel', 'showeq'];
+  const saveData = ['autoatt', 'leftlevel', 'rightlevel', 'crossfeed','crosstalkstrength', 'monooutput', 'muteleft', 'muteright', 'permutchannel', 'showeq'];
   if (self.config.get('showloudness')) saveData.push('loudness', 'loudnessthreshold', 'loudnessstrength');
   uiconf.sections[1].saveButton.data.push(...saveData);
 }
@@ -1148,6 +1178,15 @@ function configureTools(self, uiconf) {
   uiconf.sections[10].content[2].hidden = ttools;
 }
 
+
+function configureVeryAdvSet(self, uiconf) {
+  self.configManager.setUIConfigParam(uiconf, 'sections[12].content[0].value.value', self.config.get('chunksize'));
+  self.configManager.setUIConfigParam(uiconf, 'sections[12].content[0].value.label', self.config.get('chunksize'));
+  ['1200', '2400', '4800', '9600'].forEach(item => {
+    self.configManager.pushUIConfigParam(uiconf, 'sections[12].content[0].options', { value: item, label: item });
+  });
+}
+
 FusionDsp.prototype.refreshUI = function () {
   const self = this;
 
@@ -1269,6 +1308,21 @@ FusionDsp.prototype.purecamillagui = function () {
   }
 
 };
+
+FusionDsp.prototype.configureVeryAdvSet = function (data) {
+  const self = this;
+  var chunksize = data['chunksize'].value
+  self.config.set('chunksize', chunksize);
+
+  setTimeout(function () {
+    self.createCamilladspfile()
+  }, 100);
+  self.logger.info(logPrefix + ' Chunksise set to ' + chunksize);
+  self.commandRouter.pushToastMessage('success', 'Chunksise set to ' + chunksize);
+
+  self.refreshUI();
+};
+
 
 FusionDsp.prototype.startPeqGraphServer = function () {
   const self = this;
@@ -3015,12 +3069,14 @@ let getCamillaFiltersConfig = function (plugin, selectedsp, chunksize, hcurrents
   //------crossfeed section------
 
   var crossconfig = self.config.get('crossfeed')
-  var is_natural = crossconfig.includes("nc_") || crossconfig.includes("sadie_")
-  if ((crossconfig != 'None') && (!is_natural))/* && (effect))*/ {
+  const crossfeedValue = Array.isArray(crossconfig) ? crossconfig[0] : (crossconfig || 'None');
+  const crossfeedStrength = Number(getCrossfeedStrength(self)) || 0;
+  var is_natural = (crossfeedValue || '').includes("nc_") || (crossfeedValue || '').includes("sadie_")
+  if ((crossfeedValue != 'None') && (!is_natural) && (crossfeedValue !== 'cross_talk-can')) {
     var composedeq = '';
 
-    self.logger.info(logPrefix + 'Crossfeed selected : ' + (self.config.get('crossfeed')))
-    switch (crossconfig) {
+    self.logger.info(logPrefix + 'Crossfeed selected : ' + crossfeedValue)
+    switch (crossfeedValue) {
       case ("bauer"):
         crossfreq = 700
         crossatt = 4.5
@@ -3070,15 +3126,53 @@ let getCamillaFiltersConfig = function (plugin, selectedsp, chunksize, hcurrents
 
 
   }
-  if ((crossconfig != 'None') && (is_natural) && (effect)) {
+
+  if (crossfeedValue === 'cross_talk-can') {
+    var composedeq = '';
+
+    self.logger.info(logPrefix + 'Crossfeed selected : ' + crossfeedValue)
+
+
+    composedeq += '  highpass_lower:\n'
+    composedeq += '    type: BiquadCombo\n'
+    composedeq += '    parameters:\n'
+    composedeq += '      type: LinkwitzRileyHighpass\n'
+    composedeq += '      freq: 250\n'
+    composedeq += '      order: 4\n'
+    composedeq += '\n'
+    composedeq += '  lowpass_lower:\n'
+    composedeq += '    type: BiquadCombo\n'
+    composedeq += '    parameters:\n'
+    composedeq += '      type: LinkwitzRileyLowpass\n'
+    composedeq += '      freq: 250\n'
+    composedeq += '      order: 4\n'
+    composedeq += '\n'
+    composedeq += '  highpass_upper:\n'
+    composedeq += '    type: BiquadCombo\n'
+    composedeq += '    parameters:\n'
+    composedeq += '      type: LinkwitzRileyHighpass\n'
+    composedeq += '      freq: 5000\n'
+    composedeq += '      order: 4\n'
+    composedeq += '\n'
+    composedeq += '  lowpass_upper:\n'
+    composedeq += '    type: BiquadCombo\n'
+    composedeq += '    parameters:\n'
+    composedeq += '      type: LinkwitzRileyLowpass\n'
+    composedeq += '      freq: 5000\n'
+    composedeq += '      order: 4\n'
+    result += composedeq
+
+  }
+
+  if ((crossfeedValue != 'None') && (is_natural) && (effect)) {
     var composedeq = '';
 
     let hrtf_filterl = '';
     let hrtf_filterr = '';
     crossatt = 3;
 
-    self.logger.info(logPrefix + ' crossfeed  ' + (self.config.get('crossfeed')))
-    switch (crossconfig) {
+    self.logger.info(logPrefix + ' crossfeed  ' + crossfeedValue)
+    switch (crossfeedValue) {
       case ("nc_11_30"):
         hrtf_filterl = "NC_11_30/NC_11_30_Left_$samplerate$.wav";
         hrtf_filterr = "NC_11_30/NC_11_30_Right_$samplerate$.wav";
@@ -3752,7 +3846,7 @@ let getCamillaFiltersConfig = function (plugin, selectedsp, chunksize, hcurrents
       composedpipeline += '\n'
     }
 
-  } else if ((crossconfig != 'None') && (!is_natural) && (effect)) {
+  } else if ((crossfeedValue !== 'None') && (!is_natural) && effect && (crossfeedValue !== 'cross_talk-can')) {
     // -- if a crossfeed is used
     composedmixer += 'mixers:\n'
     composedmixer += '  2to4:\n'
@@ -3849,6 +3943,142 @@ let getCamillaFiltersConfig = function (plugin, selectedsp, chunksize, hcurrents
     composedpipeline += '     names:\n'
     composedpipeline += '      - ' + pipelinerr + '\n'
 
+
+  } else if ((crossfeedValue === 'cross_talk-can') && effect) {
+
+    // determine width/strength for cross_talk-can (0..2)
+    const width = crossfeedStrength;
+    let cattenuation = 3.1;
+    let cdelay = 0.075;
+    if (width === 1) {
+      cattenuation = 3;
+      cdelay = 0.08;
+    } else if (width === 2) {
+      cattenuation = 3;
+      cdelay = 0.095;
+    }
+
+    self.logger.info(logPrefix + ' cross_talk-can selected: width=' + width + ' attenuation=' + cattenuation + ' delay=' + cdelay);
+
+    composedmixer += 'mixers:\n'
+    composedmixer += '  2to6:\n'
+    composedmixer += '    channels:\n'
+    composedmixer += '       in: 2\n'
+    composedmixer += '       out: 6\n'
+    composedmixer += '    mapping:\n'
+    composedmixer += '      - dest: 0\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 0\n'
+    composedmixer += '            gain: ' + leftgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 1\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 1\n'
+    composedmixer += '            gain: ' + rightgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 2\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 0\n'
+    composedmixer += '            gain: ' + leftgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 3\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 1\n'
+    composedmixer += '            gain: ' + rightgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 4\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 0\n'
+    composedmixer += '            gain: ' + leftgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 5\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 1\n'
+    composedmixer += '            gain: ' + rightgain + '\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '  6to2:\n'
+    composedmixer += '    channels:\n'
+    composedmixer += '        in: 6\n'
+    composedmixer += '        out: 2\n'
+    composedmixer += '    mapping:\n'
+    composedmixer += '      - dest: 0\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 0\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '          - channel: 2\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '          - channel: 4\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '      - dest: 1\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: 1\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '          - channel: 3\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '          - channel: 5\n'
+    composedmixer += '            gain: -3\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '  stereo2:\n'
+    composedmixer += '    channels:\n'
+    composedmixer += '      in: 2\n'
+    composedmixer += '      out: 2\n'
+    composedmixer += '    mapping:\n'
+    composedmixer += '      - dest: 0\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: ' + c0 + '\n'
+    composedmixer += '            gain: 0\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '            mute: ' + muteleft + '\n'
+    composedmixer += '      - dest: 1\n'
+    composedmixer += '        sources:\n'
+    composedmixer += '          - channel: ' + c1 + '\n'
+    composedmixer += '            gain: 0\n'
+    composedmixer += '            inverted: false\n'
+    composedmixer += '            mute: ' + muteright + '\n'
+
+    composedpipeline += '\n'
+    composedpipeline += 'processors:\n'
+    composedpipeline += '  race:\n'
+    composedpipeline += '    type: RACE\n'
+    composedpipeline += '    parameters:\n'
+    composedpipeline += '      channels: 6\n'
+    composedpipeline += '      channel_a: 2\n'
+    composedpipeline += '      channel_b: 3\n'
+    composedpipeline += '      attenuation: ' + cattenuation + '\n'
+    composedpipeline += '      delay: ' + cdelay + '\n'
+    composedpipeline += 'pipeline:\n'
+    composedpipeline += '  - type: Mixer\n'
+    composedpipeline += '    name: 2to6\n'
+    composedpipeline += '  - type: Filter\n'
+    composedpipeline += '    channels: [0, 1]\n'
+    composedpipeline += '    names:\n'
+    composedpipeline += '      - lowpass_lower\n'
+    composedpipeline += '  - type: Filter\n'
+    composedpipeline += '    channels: [2, 3]\n'
+    composedpipeline += '    names:\n'
+    composedpipeline += '      - highpass_lower\n'
+    composedpipeline += '      - lowpass_upper\n'
+    composedpipeline += '  - type: Filter\n'
+    composedpipeline += '    channels: [4, 5]\n'
+    composedpipeline += '    names:\n'
+    composedpipeline += '      - highpass_upper\n'
+    composedpipeline += '  - type: Processor\n'
+    composedpipeline += '    name: race\n'
+    composedpipeline += '  - type: Mixer\n'
+    composedpipeline += '    name: 6to2\n'
+    composedpipeline += '  - type: Filter\n'
+    composedpipeline += '    channels: [0]\n'
+    composedpipeline += '    names:\n'
+    composedpipeline += '      - ' + pipelinelr + '\n'
+    composedpipeline += '  - type: Filter\n'
+    composedpipeline += '    channels: [1]\n'
+    composedpipeline += '    names:\n'
+    composedpipeline += '      - ' + pipelinerr + '\n'
 
   } else if ((crossconfig != 'None') && (is_natural) && (effect)) {
     // -- if a crossfeed is used
@@ -4070,7 +4300,8 @@ FusionDsp.prototype._doCreateCamilladspfile = function (callback) {
   const self = this;
   var hcurrentsamplerate = 44100;
   let selectedsp = self.config.get('selectedsp')
-  let chunksize = 4800;
+  let chunksize = self.config.get('chunksize') || 4800;
+
   let strCamillaConf;
 
   /*
@@ -4561,8 +4792,29 @@ FusionDsp.prototype.saveparameq = function (data, obj) {
     let monooutput = data["monooutput"]
     if (monooutput) {
       self.config.set('crossfeed', 'None');
+    }
+    const crossfeedValue = data['crossfeed']?.value ?? data['crossfeed'];
+    if ((crossfeedValue !== '-------speakers-----') && (crossfeedValue !== '-------headphone-----') && (crossfeedValue !== 'None')) {
+      if (crossfeedValue === 'cross_talk-can') {
+        let crosstalkstrength = data['crosstalkstrength'];
+        if (crosstalkstrength && typeof crosstalkstrength === 'object' && 'value' in crosstalkstrength) {
+          crosstalkstrength = crosstalkstrength.value;
+        }
+        if (Array.isArray(crosstalkstrength)) {
+          crosstalkstrength = crosstalkstrength[0];
+        }
+        if (crosstalkstrength == null) {
+          crosstalkstrength = self.config.get('crosstalkstrength');
+        }
+        if (crosstalkstrength == null) {
+          crosstalkstrength = 0;
+        }
+        self.config.set('crossfeed', [crossfeedValue, Number(crosstalkstrength) || 0]);
+      } else {
+        self.config.set('crossfeed', crossfeedValue);
+      }
     } else {
-      self.config.set('crossfeed', data['crossfeed'].value)
+      self.config.set('crossfeed', 'None');
     }
     let loudness = data["loudness"]
     if (loudness) {
@@ -4670,8 +4922,19 @@ FusionDsp.prototype.saveequalizerpresetv = function (data) {
   let defer = libQ.defer();
   let selectedsp = self.config.get('selectedsp');
   let parameters;
+  let crossfeedState = self.config.get('crossfeed');
+  if (Array.isArray(crossfeedState) && crossfeedState[0] === 'cross_talk-can') {
+    let crosstalkstrength = crossfeedState[1];
+    if (crosstalkstrength == null) {
+      crosstalkstrength = self.config.get('crosstalkstrength');
+    }
+    if (crosstalkstrength == null) {
+      crosstalkstrength = 0;
+    }
+    crossfeedState = [crossfeedState[0], Number(crosstalkstrength) || 0];
+  }
   let state4preset = [
-    self.config.get('crossfeed'),
+    crossfeedState,
     self.config.get('monooutput'),
     self.config.get('loudness'),
     self.config.get('loudnessthreshold'),
@@ -4717,6 +4980,7 @@ FusionDsp.prototype.saveequalizerpresetv = function (data) {
       leftfilterlabel: self.config.get('leftfilterlabel'),
       filter_format: self.config.get('filter_format'),
       mergedeq: self.config.get('mergedeq'),
+      savedmergedeqfir: self.config.get('savedmergedeqfir') || self.config.get('mergedeq'),
       state4preset: state4preset
     };
   }
@@ -4991,8 +5255,9 @@ FusionDsp.prototype.usethispreset = function (data) {
         self.config.set("leftfilter", value.leftfilter);
         self.config.set("rightfilter", value.rightfilter);
         self.config.set('leftfilterlabel', value.leftfilterlabel);
-        self.config.set('filter_format', value.filter_format)
-        self.config.set('mergedeq', value.savedmergedeqfir)
+        const filterFormat = (value.filter_format === undefined || value.filter_format === 'undefined') ? self.config.get('filter_format') : value.filter_format;
+        self.config.set('filter_format', filterFormat);
+        self.config.set('mergedeq', value.savedmergedeqfir ?? value.mergedeq);
         self.config.set("attenuationl", value.attenuationl);
         self.config.set("attenuationr", value.attenuationr);
       }
@@ -5000,7 +5265,16 @@ FusionDsp.prototype.usethispreset = function (data) {
       let state4preset = state4presetx;
 
       self.logger.info(logPrefix + ' value state4preset ' + state4preset)
-      self.config.set('crossfeed', state4preset[0])
+
+      const state4crossfeed = state4preset[0];
+      if (Array.isArray(state4crossfeed)) {
+        const crosstalkstrength = state4crossfeed[1] ?? self.config.get('crosstalkstrength') ?? 0;
+        const normalizedCrossfeed = [state4crossfeed[0], Number(crosstalkstrength) || 0];
+        self.config.set('crossfeed', normalizedCrossfeed);
+        self.config.set('crosstalkstrength', normalizedCrossfeed[1]);
+      } else {
+        self.config.set('crossfeed', state4crossfeed);
+      }
       self.config.set('monooutput', state4preset[1])
       self.config.set('loudness', state4preset[2])
       self.config.set('loudnessthreshold', state4preset[3])
@@ -5664,9 +5938,9 @@ FusionDsp.prototype.sendvolumelevel = function () {
     let loudnessGain
 
     let loudnessstrength = self.config.get('loudnessstrength')
-    loudnessstrength = [0, 1, 2,3].includes(loudnessstrength) ? loudnessstrength : 2
+    loudnessstrength = [0, 1, 2, 3].includes(loudnessstrength) ? loudnessstrength : 2
 
-    const profiles = [0.25,0.5, 0.75, 1]
+    const profiles = [0.25, 0.5, 0.75, 1]
     let profile = profiles[loudnessstrength]
 
     if (data.volume > loudnessLowThreshold && data.volume < loudnessVolumeThreshold) {
