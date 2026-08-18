@@ -31,10 +31,6 @@ SPI0_PINS = "9,10,11"
 # under 1ms per two-channel poll against a 50ms poll interval.
 SPI_CLOCK_HZ = 50000
 
-# Samples per channel per poll, median-filtered. Odd so the median is a real
-# sample. 3 costs ~3ms of a 50ms poll interval, which is not worth optimising.
-SPI_OVERSAMPLE = 3
-
 
 def restore_spi0_pinmux() -> None:
     """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
@@ -420,21 +416,14 @@ class Controls:
 
         cmd_bytes = {ch: [1, (8 + ch) << 4, 0] for ch in channels}
 
-        def _read_channel_once(ch):
-            GPIO.output(butCS, GPIO.LOW)
-            adc_data = spi.xfer2(list(cmd_bytes[ch]))
-            GPIO.output(butCS, GPIO.HIGH)
-            return ((adc_data[1] & 3) << 8) | adc_data[2]
-
         def _read_all_channels_spi(ch_list):
-            # Median at full 10-bit resolution, before the value is quantised into
-            # 32 buckets: a single stray count near a bucket edge would otherwise
-            # flip the reported button value. Median rejects outliers outright
-            # rather than averaging them part-way into the result.
             results = []
             for ch in ch_list:
-                samples = sorted(_read_channel_once(ch) for _ in range(SPI_OVERSAMPLE))
-                results.append(samples[len(samples) // 2])
+                GPIO.output(butCS, GPIO.LOW)
+                adc_data = spi.xfer2(list(cmd_bytes[ch]))
+                GPIO.output(butCS, GPIO.HIGH)
+                adc_value = ((adc_data[1] & 3) << 8) | adc_data[2]
+                results.append(adc_value)
             return results
 
         # A pinmux that never took leaves MISO dead, so every raw reading is 0 --
