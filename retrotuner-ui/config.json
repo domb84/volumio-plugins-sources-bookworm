@@ -77,11 +77,11 @@
     },
     "btn_enter": {
         "type": "text",
-        "value": "0, 24-25"
+        "value": "0, 48-51"
     },
     "btn_radio": {
         "type": "text",
-        "value": "0, 29-30"
+        "value": "0, 58-61"
     },
     "btn_spotify": {
         "type": "text",
@@ -89,46 +89,46 @@
     },
     "btn_pause": {
         "type": "text",
-        "value": "0, 31"
+        "value": "0, 62-63"
     },
     "btn_info": {
         "type": "text",
-        "value": "0, 26-27"
+        "value": "0, 52-55"
     },
     "btn_favourite": {
         "type": "text",
-        "value": "0, 23"
+        "value": "0, 46-47"
     },
     "btn_remove_favourite": {
         "type": "text",
-        "value": "7, 28"
+        "value": "7, 56-57"
     },
     "btn_sleep_timer": {
         "type": "text",
-        "value": "7, 31"
+        "value": "7, 62-63"
     },
     "btn_cancel_sleep_timer": {
         "type": "text",
-        "value": "7, 29"
+        "value": "7, 58-59"
     },
     "btn_main_menu": {
         "type": "text",
-        "value": "0, 28"
+        "value": "0, 56-57"
     },
     "btn_back": {
         "type": "text",
-        "value": "0, 21-22"
+        "value": "0, 42-45"
     },
     "btn_dimmer": {
         "type": "text",
-        "value": "0, 21"
+        "value": "0, 42-43"
     },
     "btn_no_press_channel1": {
         "type": "text",
-        "value": "0, 16"
+        "value": "0, 32-33"
     },
     "btn_no_press_channel2": {
         "type": "text",
-        "value": "7, 16"
+        "value": "7, 32-33"
     }
 }
