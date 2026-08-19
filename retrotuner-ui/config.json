@@ -43,6 +43,14 @@
         "type": "number",
         "value": "500"
     },
+    "button_samples": {
+        "type": "number",
+        "value": "5"
+    },
+    "button_hysteresis": {
+        "type": "number",
+        "value": "6"
+    },
     "rot_enc_A": {
         "type": "number",
         "value": "17"

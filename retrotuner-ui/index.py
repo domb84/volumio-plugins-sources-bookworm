@@ -36,6 +36,14 @@ def parse_int_field(config: Dict[str, Any], key: str) -> int:
     return int(config[key]["value"])
 
 
+def parse_optional_int_field(config: Dict[str, Any], key: str, default: int) -> int:
+    """Read an int setting that older config files may not carry yet."""
+    try:
+        return int(config[key]["value"])
+    except (KeyError, TypeError, ValueError):
+        return default
+
+
 def parse_button_mapping(value: str) -> Tuple[str, ...]:
     return tuple(map(str, value.split(",")))
 
@@ -83,6 +91,8 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     button_cooldown_rate = parse_int_field(config_data, "button_cooldown_rate")
     spi_bus = parse_int_field(config_data, "spi_bus")
     spi = bool(config_data["spi"]["value"])
+    button_samples = parse_optional_int_field(config_data, "button_samples", controls.ADC_SAMPLES)
+    button_hysteresis = parse_optional_int_field(config_data, "button_hysteresis", controls.BUTTON_HYSTERESIS)
 
     btn_config = load_button_config(config_data)
     btn_skip_config = load_button_skip_config(config_data)
@@ -119,6 +129,8 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         button_poll_rate=button_poll_rate,
         button_debounce_rate=button_debounce_rate,
         button_cooldown_rate=button_cooldown_rate,
+        button_samples=button_samples,
+        button_hysteresis=button_hysteresis,
     )
 
     t1 = threading.Thread(

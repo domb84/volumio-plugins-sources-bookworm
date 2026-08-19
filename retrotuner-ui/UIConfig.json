@@ -27,7 +27,9 @@
           "buttons_channel2",
           "button_poll_rate",
           "button_debounce_rate",
-          "button_cooldown_rate"
+          "button_cooldown_rate",
+          "button_samples",
+          "button_hysteresis"
         ]
       },
       "content": [
@@ -105,6 +107,20 @@
           "type":"number",
           "element": "input",
           "label": "Cooldown duration in ms for button presses",
+          "value": ""
+        },
+        {
+          "id": "button_samples",
+          "type":"number",
+          "element": "input",
+          "label": "ADC samples per poll (median; raise if readings are noisy)",
+          "value": ""
+        },
+        {
+          "id": "button_hysteresis",
+          "type":"number",
+          "element": "input",
+          "label": "Hysteresis in ADC counts for a held button",
           "value": ""
         }
       ]

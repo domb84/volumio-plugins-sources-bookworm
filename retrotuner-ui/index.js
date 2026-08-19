@@ -104,6 +104,8 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(pins, 'button_poll_rate', self.config.get('button_poll_rate'));
             setValue(pins, 'button_debounce_rate', self.config.get('button_debounce_rate'));
             setValue(pins, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
+            setValue(pins, 'button_samples', self.config.get('button_samples'));
+            setValue(pins, 'button_hysteresis', self.config.get('button_hysteresis'));
 
             // Capture section: action buttons have no stored values, but we
             // rewrite each "Configure" label to show its current mapping so the
@@ -160,18 +162,30 @@ retrotunerui.prototype.getUIConfig = function() {
 retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
-    // Function to check if a value is numeric, boolean, or comma-separated numbers
+    // Function to check if a value is numeric, boolean, or a button mapping
     function isValid(value) {
         // Check if the value is a boolean
         if (typeof value === 'boolean') {
             return true;
         }
-        
+
         // Check if the value is a comma-separated list of numbers
         if (typeof value === 'string' && value.match(/^\s*(\d+\s*,\s*)*\d+\s*$/)) {
             return true;
         }
-        
+
+        // A button mapping: "channel, value" or "channel, low-high". Ranges are
+        // the normal shape now that matching runs on raw ADC counts, so the
+        // Advanced section has to be able to save one.
+        if (typeof value === 'string' && value.match(/^\s*\d+\s*,\s*\d+\s*(-\s*\d+\s*)?$/)) {
+            return true;
+        }
+
+        // An empty value clears a mapping.
+        if (value === '') {
+            return true;
+        }
+
         // Check if the value is a single numeric value
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
@@ -223,6 +237,14 @@ var CAPTURE_BASELINE_PATH = '/tmp/retrotuner-ui-capture-baseline.json';
 var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much inactivity
 var CAPTURE_POLL_MS = 200;
 var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
+
+// Capture works on raw 10-bit ADC readings. Two presses of the same button
+// never land on exactly the same count, so confirming a capture is a tolerance
+// test and what gets stored is a band around the midpoint of the two readings
+// rather than a single point.
+var ADC_MAX = 1023;
+var CAPTURE_CONFIRM_TOLERANCE = 8;   // counts two presses may differ by and still confirm
+var CAPTURE_BAND_HALF_WIDTH = 12;    // half-width of the band written to the config
 
 // config key -> friendly label shown in toasts
 var CAPTURE_LABELS = {
@@ -390,13 +412,19 @@ retrotunerui.prototype.pollCapture = function () {
         return;
     }
 
-    if (session.candidate.channel === ch && session.candidate.value === val) {
-        const configValue = ch + ', ' + val;
+    if (session.candidate.channel === ch && Math.abs(session.candidate.value - val) <= CAPTURE_CONFIRM_TOLERANCE) {
+        // Store a band around the midpoint of the two presses. A raw reading is
+        // never identical twice, so a point value could never match again.
+        const centre = Math.round((session.candidate.value + val) / 2);
+        const low = Math.max(centre - CAPTURE_BAND_HALF_WIDTH, 0);
+        const high = Math.min(centre + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
+
+        const configValue = ch + ', ' + low + '-' + high;
         if (!self._capturedValues) { self._capturedValues = {}; }
 
         // Auto-reassign: if this value already belongs to other actions, clear
         // them so the physical button now triggers only the action just learnt.
-        const displaced = self._findConflictingButtons(session.target, ch, val);
+        const displaced = self._findConflictingButtons(session.target, ch, low, high);
         displaced.forEach(function (other) {
             self.config.set(other.key, '');
             self._capturedValues[other.label] = 'cleared';
@@ -469,11 +497,19 @@ retrotunerui.prototype.finishBaseResistanceCapture = function (session, startSeq
         return;
     }
 
+    // The resting value needs a band for the same reason a press does.
+    function restBand(value) {
+        return Math.max(value - CAPTURE_BAND_HALF_WIDTH, 0) + '-' +
+               Math.min(value + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
+    }
+
     if (!self._capturedValues) { self._capturedValues = {}; }
-    self.config.set('btn_no_press_channel1', ch1 + ', ' + val1);
-    self.config.set('btn_no_press_channel2', ch2 + ', ' + val2);
-    self._capturedValues['No Press Channel 1'] = ch1 + ', ' + val1;
-    self._capturedValues['No Press Channel 2'] = ch2 + ', ' + val2;
+    const rest1 = ch1 + ', ' + restBand(val1);
+    const rest2 = ch2 + ', ' + restBand(val2);
+    self.config.set('btn_no_press_channel1', rest1);
+    self.config.set('btn_no_press_channel2', rest2);
+    self._capturedValues['No Press Channel 1'] = rest1;
+    self._capturedValues['No Press Channel 2'] = rest2;
 
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Captured base resistance: channel ' + ch1 + ' = ' + val1 + ', channel ' + ch2 + ' = ' + val2 +
@@ -523,10 +559,10 @@ retrotunerui.prototype.saveCapture = function () {
 };
 
 // Returns [{key, label}] of OTHER buttons whose current mapping overlaps the
-// given channel/value — used to auto-reassign on capture.
-retrotunerui.prototype._findConflictingButtons = function (targetKey, channel, value) {
+// given channel/range — used to auto-reassign on capture.
+retrotunerui.prototype._findConflictingButtons = function (targetKey, channel, low, high) {
     const self = this;
-    const candidate = { channel: channel, type: 'value', value: value };
+    const candidate = { channel: channel, type: 'range', low: low, high: high };
     return Object.keys(CAPTURE_LABELS)
         .filter(function (key) { return key !== targetKey; })
         .map(function (key) {
