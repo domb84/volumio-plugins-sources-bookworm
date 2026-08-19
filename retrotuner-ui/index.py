@@ -13,7 +13,28 @@ CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("RetroTuner UI")
-logger.setLevel(logging.DEBUG)
+
+# socket.io is chatty at INFO and engineio worse: it logs every packet, including
+# whole browse payloads, which buries our own lines. Neither is useful unless you
+# are debugging the Volumio connection itself.
+logging.getLogger("socketio").setLevel(logging.WARNING)
+logging.getLogger("engineio").setLevel(logging.WARNING)
+
+
+def apply_log_level(config_data: Dict[str, Any]) -> None:
+    """Set the root level from config, so DEBUG reaches every module's logger.
+
+    Previously only this module's logger was forced to DEBUG, which left the
+    per-module loggers ("Controls", "Menu Manager", ...) inheriting the root
+    INFO level -- so the raw ADC readings logged while tuning button values
+    could never actually appear.
+    """
+    name = str(config_data.get("log_level", {}).get("value", "INFO") or "INFO").upper()
+    level = getattr(logging, name, None)
+    if not isinstance(level, int):
+        logger.warning("Unknown log_level %r; falling back to INFO", name)
+        level = logging.INFO
+    logging.getLogger().setLevel(level)
 
 stop_event = threading.Event()
 
@@ -133,42 +154,22 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         button_hysteresis=button_hysteresis,
     )
 
-    t1 = threading.Thread(
-        target=controls.Controls,
-        args=(
-            control_queue,
-            config,
-            stop_event,
-        ),
-        name="ControlsThread",
+    # Each worker is constructed here (cheap, no I/O) and its run() is the
+    # thread entry point, so hardware and network are claimed on the thread that
+    # owns them.
+    controls_worker = controls.Controls(control_queue, config, stop_event)
+    menu_worker = menu_manager.MenuManager(
+        control_queue, volumio_queue, menu_manager_queue,
+        lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
     )
+    volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 
-    t2 = threading.Thread(
-        target=menu_manager.MenuManager,
-        args=(
-            control_queue,
-            volumio_queue,
-            menu_manager_queue,
-            lcd_rs,
-            lcd_e,
-            lcd_d4,
-            lcd_d5,
-            lcd_d6,
-            lcd_d7,
-            stop_event,
-        ),
-        name="MenuManagerThread",
-    )
-
-    t3 = threading.Thread(
-        target=volumio.Volumio,
-        args=(volumio_queue, menu_manager_queue, stop_event),
-        name="VolumioThread",
-    )
-
+    t1 = threading.Thread(target=controls_worker.run, name="ControlsThread")
+    t2 = threading.Thread(target=menu_worker.run, name="MenuManagerThread")
+    t3 = threading.Thread(target=volumio_worker.run, name="VolumioThread")
     t4 = threading.Thread(
         target=api_wrapper.run_app,
-        args=("0.0.0.0", 8889, stop_event),
+        args=("127.0.0.1", 8889, stop_event),
         name="ApiThread",
     )
 
@@ -185,6 +186,8 @@ def main() -> None:
     except FileNotFoundError:
         logger.error("Unable to find configuration; exiting")
         raise SystemExit(1)
+
+    apply_log_level(config_data)
 
     threads = build_threads(config_data)
     for thread in threads:

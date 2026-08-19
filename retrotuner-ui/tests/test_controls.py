@@ -1,17 +1,17 @@
 """Tests for includes/controls.py pure logic.
 
-The class does I/O and runs blocking loops in __init__, so instances are built
-with __new__ and only the attributes a given method needs are set.
+Controls() touches no hardware -- all of that lives in run() -- so instances are
+built with the real constructor.
 """
 import queue
 import time
 from unittest.mock import Mock, patch
 
-from includes.controls import CAPTURE_PRESS_MARGIN, Controls
+from includes.controls import CAPTURE_PRESS_MARGIN, Controls, ControlsConfig
 
 
 def _bare_controls():
-    return Controls.__new__(Controls)
+    return Controls(queue.Queue(), ControlsConfig())
 
 
 class TestLookupButton:
@@ -78,9 +78,6 @@ class TestCaptureReading:
 
     def _controls(self):
         c = _bare_controls()
-        c._capture_baseline = {}
-        c._capture_pressed = {}
-        c._capture_seq = 0
         c._publish_capture_reading = Mock()
         c._publish_capture_baselines = Mock()
         return c
@@ -156,9 +153,7 @@ class TestProcessReadings:
     BTN_VALUE = 340     # the press value
 
     def _controls(self):
-        c = Controls.__new__(Controls)
-        c.controlQ = queue.Queue()
-        return c
+        return _bare_controls()
 
     def _make_states(self):
         state = Controls._new_button_state()
@@ -315,9 +310,7 @@ class TestProcessReadingsJitter:
     REST = ("range", 998, 1022)
 
     def _controls(self):
-        c = Controls.__new__(Controls)
-        c.controlQ = queue.Queue()
-        return c
+        return _bare_controls()
 
     def _run(self, c, states, readings, debounce=0.0):
         for value in readings:
@@ -360,9 +353,7 @@ class TestUncaughtReadingWarnings:
     UNMAPPED = 600
 
     def _controls(self):
-        c = Controls.__new__(Controls)
-        c.controlQ = queue.Queue()
-        return c
+        return _bare_controls()
 
     def _run(self, c, states, readings):
         for value in readings:

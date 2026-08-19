@@ -20,7 +20,7 @@ import json
 import socketio
 import re
 from datetime import datetime, timedelta
-from retrying import retry
+from tenacity import retry, wait_fixed
 
 class Volumio:
     """Socket.IO client to Volumio: translates events into menu messages."""
@@ -49,13 +49,6 @@ class Volumio:
         self.sio = socketio.Client(logger=False, engineio_logger=False,reconnection=True)
         # self.sio.connect(url=self.ws_api)
 
-        # use retry from the retrying module to reconnect until it's up
-        @retry(wait_fixed=1000)
-        def connect():
-            self.sio.connect(url=self.ws_api)
-
-        connect()
-
         # define callback functions
         self.sio.on('pushState', self._on_push_state)
         self.sio.on('pushBrowseLibrary', self._on_push_browse_library)
@@ -65,6 +58,21 @@ class Volumio:
         self.sio.on('pushBrowseSources', self._on_push_browse_sources)
         self.sio.on('pushInfoNetwork', self._on_push_info_network)
         self.sio.on('pushSleep', self._on_push_sleep)
+
+    def run(self):
+        """Connect to Volumio and service the queue until stopped. Thread entry point.
+
+        Separate from __init__ so constructing this class performs no I/O -- the
+        connect retries forever, which would block startup if it ran anywhere but
+        this thread.
+        """
+        # Retry until Volumio's socket.io server is up. Note tenacity takes
+        # seconds where the old `retrying` took milliseconds.
+        @retry(wait=wait_fixed(1))
+        def connect():
+            self.sio.connect(url=self.ws_api)
+
+        connect()
 
         # Sync sleep timer state with Volumio on startup
         self._send('getSleep')

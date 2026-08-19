@@ -1,7 +1,7 @@
 """Pytest setup: make the plugin importable off-device.
 
 The plugin imports hardware- and Volumio-only modules (RPi.GPIO, pigpio,
-spidev, socketio, rpilcdmenu, fastapi, uvicorn, retrying) at import time, none
+spidev, socketio, rpilcdmenu, fastapi, uvicorn, tenacity) at import time, none
 of which are installable on a normal dev/CI box. We register lightweight stubs
 in ``sys.modules`` before any plugin module is imported. The unit tests only
 exercise pure logic, so the stubs never need real behaviour.
@@ -19,7 +19,7 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 # Simple top-level dependencies.
-for _name in ("pigpio", "spidev", "socketio", "retrying", "fastapi", "uvicorn"):
+for _name in ("pigpio", "spidev", "socketio", "tenacity", "fastapi", "uvicorn"):
     sys.modules.setdefault(_name, MagicMock(name=_name))
 
 # RPi.GPIO — both the package and the submodule must be registered for

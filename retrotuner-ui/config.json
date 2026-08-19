@@ -138,5 +138,9 @@
     "btn_no_press_channel2": {
         "type": "text",
         "value": "7, 16"
+    },
+    "log_level": {
+        "type": "string",
+        "value": "INFO"
     }
 }

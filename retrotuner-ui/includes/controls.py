@@ -121,7 +121,6 @@ class Controls:
     """
 
     def __init__(self, controlQ: Queue, config: ControlsConfig, stop_event: Optional[threading.Event] = None) -> None:
-        logger.debug("Loading controls")
         self.controlQ = controlQ
         self.config = config
         self.stop_event = stop_event
@@ -133,6 +132,16 @@ class Controls:
         self._capture_pressed = {}       # channel -> currently-pressed flag
         self._capture_was_on = False
         self._capture_active = False     # cached flag read by the rotary callback
+
+    def run(self) -> None:
+        """Claim the hardware and poll it until stopped. Thread entry point.
+
+        Deliberately separate from __init__: constructing this class touches no
+        hardware, so it can be built (and tested) without a Pi, and the pigpio /
+        GPIO claims happen on the thread that owns them.
+        """
+        logger.debug("Loading controls")
+        config = self.config
 
         self.rotary_encoder(config.encA, config.encB)
 
@@ -154,7 +163,6 @@ class Controls:
         if self.pi is not None:
             self.pi.stop()
         logger.info('Controls stopping')
-
 
     @staticmethod
     def _new_button_state() -> Dict:

@@ -17,7 +17,7 @@ fastapi
 uvicorn
 
 # Retry helper used by the Volumio client
-retrying
+tenacity
 
 # LCD menu library (forked)
 git+https://github.com/domb84/rpi-lcd-menu.git

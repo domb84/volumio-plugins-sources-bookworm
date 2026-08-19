@@ -122,6 +122,8 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
+            setValue(section('diagnostics'), 'log_level', self.config.get('log_level'));
+
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
             setValue(encoder, 'rot_enc_B', self.config.get('rot_enc_B'));
@@ -163,10 +165,17 @@ retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
     // Function to check if a value is numeric, boolean, or a button mapping
-    function isValid(value) {
+    function isValid(value, key) {
         // Check if the value is a boolean
         if (typeof value === 'boolean') {
             return true;
+        }
+
+        // log_level is the one free-text setting; everything else is numeric,
+        // boolean or a button mapping.
+        if (key === 'log_level') {
+            return typeof value === 'string' &&
+                /^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$/i.test(value.trim());
         }
 
         // Check if the value is a comma-separated list of numbers
@@ -204,7 +213,7 @@ retrotunerui.prototype.saveOptions = function (data) {
         if (jsonObject.hasOwnProperty(key)) {
             const value = jsonObject[key];
             // console.log(`${key}: ${value}`);
-            if (isValid(value)) {
+            if (isValid(value, key)) {
                 // console.log(`${value} is a valid number, comma seperated numbers or boolean. Saving ${key}.`);
                 self.config.set(key, value);
             } else {

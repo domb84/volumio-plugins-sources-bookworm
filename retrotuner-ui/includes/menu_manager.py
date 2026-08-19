@@ -31,6 +31,7 @@ class MenuManager:
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
         self.stop_event = stop_event
+        self._lcd_pins = (lcdRS, lcdE, lcdD4, lcdD5, lcdD6, lcdD7)
 
         # menu access times
         self.menuAccessTime = datetime.now()
@@ -45,6 +46,14 @@ class MenuManager:
         self._info_release_timer: Optional[threading.Timer] = None
         self._idle_timer: Optional[threading.Timer] = None
         self._current_context: Optional[str] = None
+
+    def run(self):
+        """Claim the display and service the queues until stopped. Thread entry point.
+
+        Separate from __init__ so the class can be constructed without a display
+        attached, and so the LCD is claimed on the thread that drives it.
+        """
+        lcdRS, lcdE, lcdD4, lcdD5, lcdD6, lcdD7 = self._lcd_pins
 
         # init menu
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)

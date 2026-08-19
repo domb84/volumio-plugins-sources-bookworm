@@ -14,8 +14,8 @@
 		"icon": "fa-cog-o",
 		"plugin_type": "user_interface",
 		"architectures": [
-			"amd64",
-			"armhf"
+			"armhf",
+			"arm64"
 		],
 		"os": [
 			"bookworm"
