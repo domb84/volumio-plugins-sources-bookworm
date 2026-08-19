@@ -160,9 +160,8 @@ class TestProcessReadings:
         c.controlQ = queue.Queue()
         return c
 
-    def _make_states(self, initial_value=None):
+    def _make_states(self):
         state = Controls._new_button_state()
-        state["last_value"] = initial_value
         state["stable_since"] = 0.0
         return {self.CHANNEL: state}
 
@@ -190,23 +189,22 @@ class TestProcessReadings:
 
     def test_press_does_not_fire_immediately(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)
         assert c.controlQ.empty()
-        assert states[self.CHANNEL]["btn_state"] == "pressed"
-        assert states[self.CHANNEL]["press_action"] == "btn_pause"
+        assert states[self.CHANNEL]["press_match"][0] == "btn_pause"
 
     def test_short_press_fires_on_release(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)          # press
         self._call(c, states, self.SKIP_VALUE)         # release
         assert c.controlQ.get_nowait() == {"control": "btn_pause"}
-        assert states[self.CHANNEL]["btn_state"] == "idle"
+        assert states[self.CHANNEL]["press_match"] is None
 
     def test_held_press_does_not_fire_short_before_threshold(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)          # press
         self._call(c, states, self.BTN_VALUE)          # still held, under threshold
         assert c.controlQ.empty()
@@ -215,7 +213,7 @@ class TestProcessReadings:
 
     def test_long_press_fires_action_long_after_threshold(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)          # press -> state = pressed
         states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0  # exceed threshold
         self._call(c, states, self.BTN_VALUE)          # still held
@@ -224,7 +222,7 @@ class TestProcessReadings:
 
     def test_long_press_fires_only_once_while_held(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)
         states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
         self._call(c, states, self.BTN_VALUE)          # long press fires
@@ -233,7 +231,7 @@ class TestProcessReadings:
 
     def test_short_press_not_fired_after_long_press(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE)
         states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
         self._call(c, states, self.BTN_VALUE)          # long press fires
@@ -243,7 +241,7 @@ class TestProcessReadings:
 
     def test_no_long_press_when_threshold_is_none(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call(c, states, self.BTN_VALUE, threshold=None)
         states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0
         self._call(c, states, self.BTN_VALUE, threshold=None)  # held past threshold
@@ -256,7 +254,7 @@ class TestProcessReadings:
 
     def test_cooldown_suppresses_short_press_on_release(self):
         c = self._controls()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         states[self.CHANNEL]["last_sent"] = time.monotonic()   # sent very recently
         self._call(c, states, self.BTN_VALUE)
         self._call(c, states, self.SKIP_VALUE, cooldown=60.0)  # very long cooldown
@@ -276,7 +274,7 @@ class TestProcessReadings:
     def test_capture_mode_suppresses_short_press(self):
         c = self._controls()
         c._handle_capture_reading = Mock()
-        states = self._make_states(initial_value=self.BTN_VALUE)
+        states = self._make_states()
         self._call_capture(c, states, self.BTN_VALUE)
         assert c.controlQ.empty()
         c._handle_capture_reading.assert_called_once_with(self.CHANNEL, self.BTN_VALUE)
@@ -302,14 +300,10 @@ class TestProcessReadings:
         # action state must not be carrying a press when normal polling resumes.
         c = self._controls()
         c._handle_capture_reading = Mock()
-        states = self._make_states(initial_value=self.BTN_VALUE)
-        states[self.CHANNEL]["btn_state"] = "pressed"
-        states[self.CHANNEL]["press_action"] = "btn_pause"
-        states[self.CHANNEL]["press_spec"] = ("value", self.BTN_VALUE)
+        states = self._make_states()
+        states[self.CHANNEL]["press_match"] = ("btn_pause", ("value", self.BTN_VALUE))
         self._call_capture(c, states, self.BTN_VALUE)
-        assert states[self.CHANNEL]["btn_state"] == "idle"
-        assert states[self.CHANNEL]["press_action"] is None
-        assert states[self.CHANNEL]["press_spec"] is None
+        assert states[self.CHANNEL]["press_match"] is None
         assert c.controlQ.empty()
 
 
@@ -352,7 +346,7 @@ class TestProcessReadingsJitter:
         # 353/355 sit outside the band but inside the hysteresis margin.
         self._run(c, states, [352, 353, 351, 355, 352])
         assert c.controlQ.empty()                          # no press/release churn
-        assert states[self.CHANNEL]["btn_state"] == "pressed"
+        assert states[self.CHANNEL]["press_match"] is not None
         self._run(c, states, [1010, 1010])
         assert c.controlQ.qsize() == 1                     # exactly one short press
 

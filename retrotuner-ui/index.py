@@ -39,7 +39,7 @@ def parse_int_field(config: Dict[str, Any], key: str) -> int:
 def parse_optional_int_field(config: Dict[str, Any], key: str, default: int) -> int:
     """Read an int setting that older config files may not carry yet."""
     try:
-        return int(config[key]["value"])
+        return parse_int_field(config, key)
     except (KeyError, TypeError, ValueError):
         return default
 

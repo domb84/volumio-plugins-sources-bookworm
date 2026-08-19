@@ -1,10 +1,7 @@
 """Tests for includes/utils.py: parse_button_config and the raw-value helpers."""
-import pytest
-
 from includes.utils import (
     LEGACY_VALUE_CEILING,
     looks_like_legacy_values,
-    median,
     parse_button_config,
     spec_contains,
 )
@@ -91,22 +88,3 @@ class TestSpecContains:
         assert spec_contains(("range", 320, 352), 314, margin=6)
         assert spec_contains(("range", 320, 352), 358, margin=6)
         assert not spec_contains(("range", 320, 352), 359, margin=6)
-
-
-class TestMedian:
-    def test_odd_count_takes_the_middle(self):
-        assert median([340, 338, 342]) == 340
-
-    def test_even_count_is_biased_low(self):
-        assert median([340, 342]) == 340
-
-    def test_single_outlier_is_discarded(self):
-        # One read corrupted by a strobe must not move the result at all.
-        assert median([339, 340, 341, 340, 12]) == 340
-
-    def test_result_is_always_one_of_the_samples(self):
-        assert median([1, 2, 4, 8, 16]) in (1, 2, 4, 8, 16)
-
-    def test_empty_raises(self):
-        with pytest.raises(ValueError):
-            median([])

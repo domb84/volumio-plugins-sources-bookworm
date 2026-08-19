@@ -174,10 +174,11 @@ retrotunerui.prototype.saveOptions = function (data) {
             return true;
         }
 
-        // A button mapping: "channel, value" or "channel, low-high". Ranges are
-        // the normal shape now that matching runs on raw ADC counts, so the
-        // Advanced section has to be able to save one.
-        if (typeof value === 'string' && value.match(/^\s*\d+\s*,\s*\d+\s*(-\s*\d+\s*)?$/)) {
+        // A button mapping range, "channel, low-high". Ranges are the normal
+        // shape now that matching runs on raw ADC counts, so the Advanced
+        // section has to be able to save one. The plain "channel, value" form is
+        // already accepted by the comma-separated check above.
+        if (typeof value === 'string' && value.match(/^\s*\d+\s*,\s*\d+\s*-\s*\d+\s*$/)) {
             return true;
         }
 
@@ -243,8 +244,26 @@ var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alon
 // test and what gets stored is a band around the midpoint of the two readings
 // rather than a single point.
 var ADC_MAX = 1023;
-var CAPTURE_CONFIRM_TOLERANCE = 8;   // counts two presses may differ by and still confirm
-var CAPTURE_BAND_HALF_WIDTH = 12;    // half-width of the band written to the config
+// Sized against a measured Teac ladder: adjacent buttons sit 69-141 counts
+// apart, so a +/-25 band still leaves ~19 counts of guard on the tightest pair.
+// The dominant error is not electrical noise but contact resistance -- an aged
+// carbon switch read 21 counts higher on a light press than a firm one -- so the
+// band has to cover how hard the button happens to be pressed, and the
+// confirmation tolerance has to accept two presses that differ by that much or
+// the button can never be captured at all.
+var CAPTURE_CONFIRM_TOLERANCE = 15;  // counts two presses may differ by and still confirm
+var CAPTURE_BAND_HALF_WIDTH = 25;    // half-width of the band written to the config
+
+// Raw 0 is what an unreachable MCP3008 returns on every channel, so no band may
+// claim it -- otherwise a dead SPI bus reads as one button held down forever.
+var MIN_BAND_VALUE = 1;
+
+// The band a captured reading is stored as. One definition: a press and a
+// resting value are banded the same way, and the clamps only exist once.
+function bandAround(centre) {
+    return Math.max(centre - CAPTURE_BAND_HALF_WIDTH, MIN_BAND_VALUE) + '-' +
+           Math.min(centre + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
+}
 
 // config key -> friendly label shown in toasts
 var CAPTURE_LABELS = {
@@ -416,15 +435,12 @@ retrotunerui.prototype.pollCapture = function () {
         // Store a band around the midpoint of the two presses. A raw reading is
         // never identical twice, so a point value could never match again.
         const centre = Math.round((session.candidate.value + val) / 2);
-        const low = Math.max(centre - CAPTURE_BAND_HALF_WIDTH, 0);
-        const high = Math.min(centre + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
-
-        const configValue = ch + ', ' + low + '-' + high;
+        const configValue = ch + ', ' + bandAround(centre);
         if (!self._capturedValues) { self._capturedValues = {}; }
 
         // Auto-reassign: if this value already belongs to other actions, clear
         // them so the physical button now triggers only the action just learnt.
-        const displaced = self._findConflictingButtons(session.target, ch, low, high);
+        const displaced = self._findConflictingButtons(session.target, ch, centre);
         displaced.forEach(function (other) {
             self.config.set(other.key, '');
             self._capturedValues[other.label] = 'cleared';
@@ -497,15 +513,9 @@ retrotunerui.prototype.finishBaseResistanceCapture = function (session, startSeq
         return;
     }
 
-    // The resting value needs a band for the same reason a press does.
-    function restBand(value) {
-        return Math.max(value - CAPTURE_BAND_HALF_WIDTH, 0) + '-' +
-               Math.min(value + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
-    }
-
     if (!self._capturedValues) { self._capturedValues = {}; }
-    const rest1 = ch1 + ', ' + restBand(val1);
-    const rest2 = ch2 + ', ' + restBand(val2);
+    const rest1 = ch1 + ', ' + bandAround(val1);
+    const rest2 = ch2 + ', ' + bandAround(val2);
     self.config.set('btn_no_press_channel1', rest1);
     self.config.set('btn_no_press_channel2', rest2);
     self._capturedValues['No Press Channel 1'] = rest1;
@@ -558,11 +568,13 @@ retrotunerui.prototype.saveCapture = function () {
     return libQ.resolve();
 };
 
-// Returns [{key, label}] of OTHER buttons whose current mapping overlaps the
-// given channel/range — used to auto-reassign on capture.
-retrotunerui.prototype._findConflictingButtons = function (targetKey, channel, low, high) {
+// Returns [{key, label}] of OTHER buttons whose mapping overlaps the band a
+// reading at `centre` would be stored as — used to auto-reassign on capture.
+retrotunerui.prototype._findConflictingButtons = function (targetKey, channel, centre) {
     const self = this;
-    const candidate = { channel: channel, type: 'range', low: low, high: high };
+    const band = bandAround(centre).split('-');
+    const candidate = { channel: channel, type: 'range',
+                        low: parseInt(band[0], 10), high: parseInt(band[1], 10) };
     return Object.keys(CAPTURE_LABELS)
         .filter(function (key) { return key !== targetKey; })
         .map(function (key) {

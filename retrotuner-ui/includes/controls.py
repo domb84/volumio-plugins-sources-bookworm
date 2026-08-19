@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import logging
+from statistics import median_low
 from dataclasses import dataclass, field
 from queue import Queue
 from typing import Dict, List, Optional, Tuple
@@ -15,7 +16,6 @@ logger = logging.getLogger("Controls")
 from .utils import (
     LEGACY_VALUE_CEILING,
     looks_like_legacy_values,
-    median,
     parse_button_config,
     spec_contains,
 )
@@ -37,14 +37,19 @@ SPI0_PINS = "9,10,11"
 # under 1ms per two-channel poll against a 50ms poll interval.
 SPI_CLOCK_HZ = 50000
 
+# Floor on the poll interval, whatever the configured rate says.
+MIN_POLL = 0.05
+
 # Readings are matched against the raw 10-bit ADC value. Buttons on the ladder
 # land roughly 30-60 counts apart, so the tolerances below are sized against
 # that gap: wide enough to absorb the noise on one reading, narrow enough to
 # leave a guard band between neighbouring buttons.
 #
-# ADC_SAMPLES readings are taken per channel per poll and reduced with a median.
-# At 50kHz that is well under 1ms against a 50ms poll, and the median discards
-# a read corrupted by an LCD strobe rather than averaging its error in.
+# ADC_SAMPLES readings are taken per channel per poll and reduced with a median,
+# which discards a read corrupted by an LCD strobe rather than averaging its
+# error in. Mind the cost before raising it: one read is 3 bytes, so at
+# SPI_CLOCK_HZ each costs 480us and a 5-sample two-channel poll spends ~4.8ms on
+# the wire -- a tenth of the 50ms interval, in one contiguous burst.
 ADC_SAMPLES = 5
 
 # Once a button has matched, its band is widened by this many counts before the
@@ -152,29 +157,24 @@ class Controls:
 
 
     @staticmethod
-    def _warn_if_legacy_values(parsed_btns: List) -> None:
-        """Call out a config that still holds pre-raw button values.
-
-        Matching used to run on a 32-bucket scale. Those stored values are all
-        far below any real ladder reading, so they simply never match and every
-        button goes quiet -- a confusing symptom to debug from silence alone.
-        """
-        if looks_like_legacy_values(parsed_btns):
-            logger.warning(
-                "Every configured button value is <= %d, which looks like the old "
-                "32-bucket scale rather than a raw ADC reading. Buttons will not "
-                "respond until they are re-captured in the settings page.",
-                LEGACY_VALUE_CEILING,
-            )
-
-    @staticmethod
     def _new_button_state() -> Dict:
-        """Per-channel tracking for the debounce/press state machine."""
-        return {"last_value": None, "last_key": None, "stable_since": None, "last_sent": 0.0,
-                "last_action": None, "last_spec": None, "warned": False,
-                "btn_state": "idle", "press_action": None, "press_spec": None,
+        """Per-channel tracking for the debounce/press state machine.
+
+        `press_match` and `last_match` are each an (action, spec) pair or None:
+        the press currently latched, and whatever the previous reading resolved
+        to. Both feed hysteresis -- see `_process_readings`.
+        """
+        return {"last_key": None, "stable_since": None, "last_sent": 0.0, "warned": False,
+                "press_match": None, "last_match": None,
                 "press_start": None, "long_press_fired": False,
                 "capture_anchor": None, "capture_since": None}
+
+    @staticmethod
+    def _clear_press(state: Dict) -> None:
+        """Drop any latched press, leaving the channel idle."""
+        state["press_match"] = None
+        state["press_start"] = None
+        state["long_press_fired"] = False
 
     @staticmethod
     def _lookup_button(
@@ -306,19 +306,13 @@ class Controls:
         for data, channel in zip(batch_data, channels):
             state = button_states[channel]
             now = time.monotonic()
-            state["last_value"] = data
 
             if capture:
-                # Hold the action state neutral so resuming from capture (which
+                # Keep the press state neutral so resuming from capture (which
                 # happens without a restart on the idle timeout) can't fire a
                 # press that was only ever meant to be learnt.
-                state["last_key"] = None
-                state["stable_since"] = None
-                state["last_action"] = None
-                state["last_spec"] = None
-                state["btn_state"] = "idle"
-                state["press_action"] = None
-                state["press_spec"] = None
+                self._clear_press(state)
+                state.update(last_key=None, stable_since=None, last_match=None)
                 self._track_capture(state, channel, data, now, button_debounce_rate)
                 continue
 
@@ -327,19 +321,13 @@ class Controls:
             # latched press would be too late: a reading straddling a band edge
             # alternates between two matches, so the debounce never settles and
             # the press never latches in the first place.
-            if state["press_spec"]:
-                held = (state["press_action"], state["press_spec"])
-            elif state["last_spec"]:
-                held = (state["last_action"], state["last_spec"])
-            else:
-                held = None
-
+            held = state["press_match"] or state["last_match"]
             skipped, action, spec = self._lookup_button(
                 channel, data, parsed_btns, parsed_skips, held, hysteresis,
             )
-            key = ("skip",) if skipped else ("btn", action) if action else ("none",)
-            state["last_action"], state["last_spec"] = action, spec
+            state["last_match"] = (action, spec) if spec else None
 
+            key = (skipped, action)
             if key != state["last_key"]:
                 state["stable_since"] = now
                 state["last_key"] = key
@@ -348,57 +336,41 @@ class Controls:
             if now - (state["stable_since"] or 0) < button_debounce_rate:
                 continue
 
+            press = state["press_match"]
+            ready = (press and not state["long_press_fired"]
+                     and now - state["last_sent"] >= button_cooldown_rate)
+
             if skipped:
-                # Value is in a skip range — treat as "released"
-                if state["btn_state"] == "pressed" and not state["long_press_fired"]:
-                    short_action = state["press_action"]
-                    if short_action and now - state["last_sent"] >= button_cooldown_rate:
-                        logger.debug(f"Channel {channel} short press: {short_action}")
-                        self.controlQ.put({'control': short_action})
-                        state["last_sent"] = now
-                state["btn_state"] = "idle"
-                state["press_action"] = None
-                state["press_spec"] = None
-                state["press_start"] = None
-                state["long_press_fired"] = False
+                # Resting value: a press that was being held ends here as a short press.
+                if ready:
+                    logger.debug(f"Channel {channel} short press: {press[0]}")
+                    self.controlQ.put({'control': press[0]})
+                    state["last_sent"] = now
+                self._clear_press(state)
                 continue
 
             if action:
-                if state["btn_state"] == "idle":
-                    state["btn_state"] = "pressed"
-                    state["press_action"] = action
-                    state["press_spec"] = spec
+                if press is None:
+                    state["press_match"] = (action, spec)
                     state["press_start"] = now
                     state["long_press_fired"] = False
                     logger.debug(f"Channel {channel} press start: {action} (raw {data})")
-                elif state["btn_state"] == "pressed" and long_press_threshold is not None:
-                    if not state["long_press_fired"] and now - (state["press_start"] or now) >= long_press_threshold:
-                        long_action = action + "_long"
-                        logger.debug(f"Channel {channel} long press: {long_action}")
-                        self.controlQ.put({'control': long_action})
-                        state["long_press_fired"] = True
-                        state["last_sent"] = now
-            else:
-                # No matching action (unrecognised value) — treat as released if
-                # was pressed. Warn once per episode rather than once per poll:
-                # a resting value that has drifted off its configured band sits
-                # here indefinitely and would otherwise flood the log.
-                warn = not state["warned"]
+                elif (long_press_threshold is not None and not state["long_press_fired"]
+                      and now - (state["press_start"] or now) >= long_press_threshold):
+                    logger.debug(f"Channel {channel} long press: {action}_long")
+                    self.controlQ.put({'control': action + "_long"})
+                    state["long_press_fired"] = True
+                    state["last_sent"] = now
+                continue
+
+            # Unrecognised value. Warn once per episode rather than once per poll:
+            # a resting value that has drifted off its configured band sits here
+            # indefinitely and would otherwise flood the log.
+            if not state["warned"]:
                 state["warned"] = True
-                if state["btn_state"] == "pressed":
-                    short_action = state["press_action"]
-                    if warn:
-                        if not state["long_press_fired"] and now - state["last_sent"] >= button_cooldown_rate and short_action:
-                            logger.warning(f"Uncaught press on Channel {channel}: {data} (releasing {short_action})")
-                        else:
-                            logger.warning(f"Uncaught press on Channel {channel}: {data}")
-                    state["btn_state"] = "idle"
-                    state["press_action"] = None
-                    state["press_spec"] = None
-                    state["press_start"] = None
-                    state["long_press_fired"] = False
-                elif warn:
-                    logger.warning(f"Uncaught press on Channel {channel}: {data}")
+                suffix = f" (releasing {press[0]})" if ready else ""
+                logger.warning(f"Uncaught press on Channel {channel}: {data}{suffix}")
+            self._clear_press(state)
 
     def rotary_encoder(self, encA, encB):
         Enc_A = encA
@@ -440,81 +412,88 @@ class Controls:
 
         logger.info('Rotary thread start successfully, listening for turns')
 
-    def buttons(self, butClk, butDOUT, butDIN, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate, button_debounce_rate, button_cooldown_rate):
-        CLK = butClk
-        DOUT = butDOUT
-        DIN = butDIN
-        CS = butCS
+    def _run_button_loop(self, mode, read_all, channels, btn_config, btn_skip_config,
+                         button_poll_rate, button_debounce_rate, button_cooldown_rate):
+        """Poll `read_all` and turn the readings into control events until stopped.
 
-        channels = [but1, but2]
-
-        button_poll_rate /= 1000
-        button_debounce_rate /= 1000
-        button_cooldown_rate /= 1000
-
-        MIN_POLL = 0.05
-        button_poll_rate = max(button_poll_rate, MIN_POLL) if button_poll_rate > 0 else MIN_POLL
+        The two hardware paths differ only in how a channel is read, so
+        everything from sampling to the press state machine lives here and each
+        caller supplies just its reader.
+        """
+        poll = max(button_poll_rate / 1000, MIN_POLL)
+        debounce = button_debounce_rate / 1000
+        cooldown = button_cooldown_rate / 1000
 
         samples = max(1, self.config.button_samples)
         hysteresis = self.config.button_hysteresis
 
-        logger.info("Bitbanged controls polling every %.3fs (median of %d samples)",
-                    button_poll_rate, samples)
+        parsed_btns = parse_button_config(btn_config)
+        parsed_skips = parse_button_config(btn_skip_config)
+        if looks_like_legacy_values(parsed_btns):
+            logger.warning(
+                "Every configured button value is <= %d, which looks like the old "
+                "32-bucket scale rather than a raw ADC reading. Buttons will not "
+                "respond until they are re-captured in the settings page.",
+                LEGACY_VALUE_CEILING,
+            )
+
+        logger.info("%s controls polling every %.3fs (median of %d samples)",
+                    mode, poll, samples)
 
         button_states = {channel: self._new_button_state() for channel in channels}
 
-        parsed_btns = parse_button_config(btn_config)
-        parsed_skips = parse_button_config(btn_skip_config)
-        self._warn_if_legacy_values(parsed_btns)
-
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(CLK, GPIO.OUT)
-        GPIO.setup(DOUT, GPIO.IN)
-        GPIO.setup(DIN, GPIO.OUT)
-        GPIO.setup(CS, GPIO.OUT)
-
-        command_map = {ch: (ch | 0x18) << 3 for ch in channels}
-
-        def read_mcp3008(channel):
-            GPIO.output(CS, GPIO.LOW)
-            command = command_map[channel]
-            for _ in range(5):
-                GPIO.output(DIN, GPIO.HIGH if (command & 0x80) else GPIO.LOW)
-                command <<= 1
-                GPIO.output(CLK, GPIO.HIGH)
-                GPIO.output(CLK, GPIO.LOW)
-            value = 0
-            for _ in range(10):
-                GPIO.output(CLK, GPIO.HIGH)
-                GPIO.output(CLK, GPIO.LOW)
-                value = (value << 1) | (1 if GPIO.input(DOUT) else 0)
-            GPIO.output(CS, GPIO.HIGH)
-            return value
-
         while not (self.stop_event and self.stop_event.is_set()):
-            # Sweep every channel once per pass rather than taking a channel's
-            # samples back to back, so the samples being reduced are spread
-            # across the poll and a burst of noise can't land on all of them.
-            passes = [[] for _ in channels]
+            passes = []
             for _ in range(samples):
                 if self.stop_event and self.stop_event.is_set():
                     break
-                for idx, channel in enumerate(channels):
-                    passes[idx].append(read_mcp3008(channel))
-
-            if not all(passes):
+                passes.append(read_all(channels))
+            if not passes:
                 break
-            batch_data = [median(reads) for reads in passes]
+            batch_data = [median_low([p[i] for p in passes]) for i in range(len(channels))]
 
             self._process_readings(batch_data, channels, button_states, parsed_btns, parsed_skips,
-                                   button_debounce_rate, button_cooldown_rate,
+                                   debounce, cooldown,
                                    long_press_threshold=self.config.long_press_threshold,
                                    capture=self._refresh_capture_state(),
                                    hysteresis=hysteresis)
 
-            time.sleep(button_poll_rate)
+            time.sleep(poll)
 
-        logger.info('Buttons (bitbang) stopping')
+        logger.info("Buttons (%s) stopping", mode)
+
+    def buttons(self, butClk, butDOUT, butDIN, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate, button_debounce_rate, button_cooldown_rate):
+        channels = [but1, but2]
+
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(butClk, GPIO.OUT)
+        GPIO.setup(butDOUT, GPIO.IN)
+        GPIO.setup(butDIN, GPIO.OUT)
+        GPIO.setup(butCS, GPIO.OUT)
+
+        command_map = {ch: (ch | 0x18) << 3 for ch in channels}
+
+        def read_mcp3008(channel):
+            GPIO.output(butCS, GPIO.LOW)
+            command = command_map[channel]
+            for _ in range(5):
+                GPIO.output(butDIN, GPIO.HIGH if (command & 0x80) else GPIO.LOW)
+                command <<= 1
+                GPIO.output(butClk, GPIO.HIGH)
+                GPIO.output(butClk, GPIO.LOW)
+            value = 0
+            for _ in range(10):
+                GPIO.output(butClk, GPIO.HIGH)
+                GPIO.output(butClk, GPIO.LOW)
+                value = (value << 1) | (1 if GPIO.input(butDOUT) else 0)
+            GPIO.output(butCS, GPIO.HIGH)
+            return value
+
+        def read_all(chs):
+            return [read_mcp3008(ch) for ch in chs]
+
+        self._run_button_loop("bitbang", read_all, channels, btn_config, btn_skip_config,
+                              button_poll_rate, button_debounce_rate, button_cooldown_rate)
 
     def buttons_spi(self, spi_bus, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate=10, button_debounce_rate=50, button_cooldown_rate=500):
         restore_spi0_pinmux()
@@ -529,57 +508,28 @@ class Controls:
 
         channels = [but1, but2]
 
-        button_poll_rate = max(button_poll_rate / 1000, 0.05)
-        button_debounce_rate /= 1000
-        button_cooldown_rate /= 1000
-
-        samples = max(1, self.config.button_samples)
-        hysteresis = self.config.button_hysteresis
-
-        logger.info("SPI controls polling every %.3fs (median of %d samples)",
-                    button_poll_rate, samples)
-
-        button_states = {channel: self._new_button_state() for channel in channels}
-
-        parsed_btns = parse_button_config(btn_config)
-        parsed_skips = parse_button_config(btn_skip_config)
-        self._warn_if_legacy_values(parsed_btns)
-
         cmd_bytes = {ch: [1, (8 + ch) << 4, 0] for ch in channels}
 
-        def _read_all_channels_spi(ch_list):
+        def read_all(chs):
             results = []
-            for ch in ch_list:
+            for ch in chs:
                 GPIO.output(butCS, GPIO.LOW)
                 adc_data = spi.xfer2(list(cmd_bytes[ch]))
                 GPIO.output(butCS, GPIO.HIGH)
-                adc_value = ((adc_data[1] & 3) << 8) | adc_data[2]
-                results.append(adc_value)
+                results.append(((adc_data[1] & 3) << 8) | adc_data[2])
             return results
 
         # A pinmux that never took leaves MISO dead, so every raw reading is 0 --
         # a legitimate-looking value at the bottom of the range rather than an
         # obviously broken read, so it is worth calling out explicitly.
-        if not any(_read_all_channels_spi(channels)):
+        if not any(read_all(channels)):
             logger.warning(
                 "Initial SPI read was raw 0 on every channel; the MCP3008 may not be "
                 "reachable. Check `raspi-gpio get %s` reports func=ALT0.", SPI0_PINS,
             )
 
-        while not (self.stop_event and self.stop_event.is_set()):
-            # Sweep every channel once per pass rather than taking a channel's
-            # samples back to back, so the samples being reduced are spread
-            # across the poll and a burst of noise can't land on all of them.
-            passes = [_read_all_channels_spi(channels) for _ in range(samples)]
-            batch_data = [median([p[idx] for p in passes]) for idx in range(len(channels))]
-
-            self._process_readings(batch_data, channels, button_states, parsed_btns, parsed_skips,
-                                   button_debounce_rate, button_cooldown_rate,
-                                   long_press_threshold=self.config.long_press_threshold,
-                                   capture=self._refresh_capture_state(),
-                                   hysteresis=hysteresis)
-
-            time.sleep(button_poll_rate)
-
-        spi.close()
-        logger.info('Buttons (SPI) stopping')
+        try:
+            self._run_button_loop("SPI", read_all, channels, btn_config, btn_skip_config,
+                                  button_poll_rate, button_debounce_rate, button_cooldown_rate)
+        finally:
+            spi.close()
