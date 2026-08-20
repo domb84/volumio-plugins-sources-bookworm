@@ -256,7 +256,16 @@ retrotunerui.prototype.saveOptions = function (data) {
         });
     }
 
-    if (self._checkButtonConflicts()) {
+    const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
+
+    if (spiModeChanged) {
+        // A plugin restart can't apply an SPI/bitbang switch -- only a reboot
+        // re-probes the pin mux -- and restarting right now would try to open
+        // a kernel SPI device that doesn't exist yet (or is still bitbang'd),
+        // crashing the controls thread. The modal above is the only path
+        // forward here; this restart happens implicitly once they reboot.
+        self.logger.info('RetroTuner UI - SPI mode changed; not restarting the plugin (needs a device reboot instead)');
+    } else if (noConflicts) {
         self.logger.info('RetroTuner UI - restarting services');
         self.onRestart();
     }
@@ -313,6 +322,20 @@ var CAPTURE_LABELS = {
     btn_dimmer: 'Dimmer',
     btn_main_menu: 'Main Menu',
     btn_back: 'Back'
+};
+
+// Pushes the current getUIConfig() output to any open settings page, so a
+// value changed here (capture, clear, base resistance) shows up immediately
+// instead of needing a manual page reload.
+retrotunerui.prototype._refreshUiConfig = function () {
+    const self = this;
+    self.commandRouter.getUIConfigOnPlugin('user_interface', 'retrotuner-ui', {})
+        .then(function (config) {
+            self.commandRouter.broadcastMessage('pushUiConfig', config);
+        })
+        .fail(function (e) {
+            self.logger.error('RetroTuner UI - could not refresh settings page: ' + e);
+        });
 };
 
 // Conflict detection helpers ---------------------------------------------------
@@ -381,6 +404,7 @@ retrotunerui.prototype.clearSelectedButton = function () {
 
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         '"' + label + '" cleared. Configure another button, or click "Save & Restart Controls".');
+    self._refreshUiConfig();
     return libQ.resolve();
 };
 
@@ -485,6 +509,7 @@ retrotunerui.prototype.pollCapture = function () {
         }
         msg += ' Configure another button, or click "Save & Restart Controls".';
         self.commandRouter.pushToastMessage(displaced.length > 0 ? 'warning' : 'success', 'Button Capture', msg);
+        self._refreshUiConfig();
 
         // Stay in the session (controls remain paused); wait for the next button.
         session.target = null;
@@ -554,6 +579,7 @@ retrotunerui.prototype.finishBaseResistanceCapture = function (session, startSeq
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Captured base resistance: channel ' + ch1 + ' = ' + val1 + ', channel ' + ch2 + ' = ' + val2 +
         '. Configure another button, or click "Save & Restart Controls".');
+    self._refreshUiConfig();
 };
 
 retrotunerui.prototype.endCaptureSession = function () {
@@ -589,11 +615,13 @@ retrotunerui.prototype.saveCapture = function () {
     if (!self._checkButtonConflicts()) {
         self.commandRouter.pushToastMessage('info', 'Button Capture',
             'Values saved (' + summary + ') but restart blocked — fix the conflict above first.');
+        self._refreshUiConfig();
         return libQ.resolve();
     }
 
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Saved (' + summary + '). Restarting controls...');
+    self._refreshUiConfig();
     self.onRestart();
     return libQ.resolve();
 };
