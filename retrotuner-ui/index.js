@@ -136,12 +136,10 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
             setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
             setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            // Added after these two shipped, so an old on-disk config may not have
-            // them at all -- v-conf's get() then returns undefined, leaving the
-            // field blank, and a Save with nothing typed in it submits an empty
-            // string that isValid() rejects (silently, since nothing changed to
-            // draw the eye to the toast). The fallback here must match controls.py's
-            // ADC_SAMPLES/BUTTON_HYSTERESIS -- keep the two in sync if either changes.
+            // Added after these shipped, so an old config may not have them -- v-conf's
+            // get() then returns undefined, leaving the field blank, and an unedited
+            // Save submits an empty string that isValid() silently rejects. Must match
+            // controls.py's ADC_SAMPLES/BUTTON_HYSTERESIS -- keep the two in sync.
             setValue(advanced, 'button_samples', self.config.get('button_samples', 5));
             setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis', 6));
             defer.resolve(uiconf);
@@ -216,20 +214,15 @@ var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much in
 var CAPTURE_POLL_MS = 200;
 var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
 
-// Capture works on raw 10-bit ADC readings. Two presses of the same button
-// never land on exactly the same count, so confirming a capture is a tolerance
-// test and what gets stored is a band around the midpoint of the two readings
-// rather than a single point.
+// Capture works on raw ADC readings, which never land on exactly the same
+// count twice, so confirming a capture is a tolerance test and what gets
+// stored is a band around the midpoint of the two readings.
 var ADC_MAX = 1023;
-// Sized against a measured Teac ladder: adjacent buttons sit 69-141 counts
-// apart, so a +/-25 band still leaves ~19 counts of guard on the tightest pair.
-// controls.py's BUTTON_HYSTERESIS is sized against this same measurement --
-// keep the two in sync if either changes.
-// The dominant error is not electrical noise but contact resistance -- an aged
-// carbon switch read 21 counts higher on a light press than a firm one -- so the
-// band has to cover how hard the button happens to be pressed, and the
-// confirmation tolerance has to accept two presses that differ by that much or
-// the button can never be captured at all.
+// Sized against a measured Teac ladder (adjacent buttons 69-141 counts apart --
+// keep in sync with controls.py's BUTTON_HYSTERESIS). The dominant error is
+// contact resistance, not noise -- an aged switch read 21 counts higher on a
+// light press than a firm one, so both the band and the confirm tolerance
+// have to cover that much press-to-press variation.
 var CAPTURE_CONFIRM_TOLERANCE = 15;  // counts two presses may differ by and still confirm
 var CAPTURE_BAND_HALF_WIDTH = 25;    // half-width of the band written to the config
 
@@ -298,10 +291,9 @@ retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 
-// Clear the button currently selected for capture. Clearing is folded into the
-// same staged session as capturing, so a single "Save & Restart Controls"
-// applies both. The user chooses which button by clicking its "Configure"
-// button first, then clicks "Clear Selected Button" instead of pressing it.
+// Clear the button currently selected for capture. Folded into the same
+// staged session as capturing, so one "Save & Restart Controls" applies both --
+// choose the button via "Configure", then click "Clear Selected Button".
 retrotunerui.prototype.clearSelectedButton = function () {
     const self = this;
     const session = self._captureSession;
@@ -328,10 +320,9 @@ retrotunerui.prototype.clearSelectedButton = function () {
     return libQ.resolve();
 };
 
-// Begin a capture session if one isn't already running. The session keeps
-// the controls paused (via the flag file) until the user saves or goes
-// idle, so button presses never reach the device while configuring.
-// Returns false if the session could not be started.
+// Begin a capture session if one isn't already running. Keeps the controls
+// paused (via the flag file) until the user saves or goes idle. Returns
+// false if the session could not be started.
 retrotunerui.prototype.ensureCaptureSession = function () {
     const self = this;
     if (self._captureSession) { return true; }

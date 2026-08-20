@@ -25,37 +25,28 @@ CAPTURE_BASELINE_PATH = "/tmp/retrotuner-ui-capture-baseline.json"
 # selects SPI0, so they are fixed regardless of the configured pin numbers.
 SPI0_PINS = "9,10,11"
 
-# The MCP3008 charges its sample-and-hold cap through the resistor ladder during
-# a window of only 1.5 clock cycles. At 1MHz that is 1.5us, which only settles a
-# source impedance up to ~7k -- marginal for a button ladder, so readings drifted
-# across bucket boundaries. 50kHz gives a 30us window (good for ~200k) and costs
-# under 1ms per two-channel poll against a 50ms poll interval.
+# The MCP3008's 1.5-cycle sample-and-hold window only settles ~7k of source
+# impedance at 1MHz -- too marginal for this button ladder, causing readings
+# to drift across boundaries. 50kHz settles ~200k at negligible extra cost.
 SPI_CLOCK_HZ = 50000
 
 # Floor on the poll interval, whatever the configured rate says.
 MIN_POLL = 0.05
 
-# Readings are matched against the raw 10-bit ADC value. On a measured Teac
-# ladder, adjacent buttons sit 69-141 counts apart (see CAPTURE_BAND_HALF_WIDTH
-# in index.js, which captures against the same hardware), so the tolerances
-# below are sized against that gap: wide enough to absorb the noise on one
-# reading, narrow enough to leave a guard band between neighbouring buttons.
-# Keep this in sync with index.js's capture tolerances if either changes.
-#
-# ADC_SAMPLES readings are taken per channel per poll and reduced with a median,
-# which discards a read corrupted by an LCD strobe rather than averaging its
-# error in. Mind the cost before raising it: one read is 3 bytes, so at
-# SPI_CLOCK_HZ each costs 480us and a 5-sample two-channel poll spends ~4.8ms on
-# the wire -- a tenth of the 50ms interval, in one contiguous burst. index.js's
-# getUIConfig falls back to this same number when an older config.json predates
-# the setting -- keep the two in sync if this changes.
+# Readings are matched against the raw ADC value. On a measured Teac ladder,
+# adjacent buttons sit 69-141 counts apart (see CAPTURE_BAND_HALF_WIDTH in
+# index.js), so the tolerances below are sized against that gap. Keep in sync
+# with index.js's capture tolerances if either changes.
+
+# Readings per channel per poll, reduced with a median (discards a read
+# corrupted by an LCD strobe rather than averaging its error in). Each raw
+# read costs ~480us at SPI_CLOCK_HZ, so mind the poll interval before raising
+# this. index.js falls back to this same default for an older config.
 ADC_SAMPLES = 5
 
-# Once a button has matched, its band is widened by this many counts before the
-# press is allowed to end. Without it a reading sitting on a band edge flickers
-# in and out of the match and reads as a stream of press/release pairs.
-# index.js's getUIConfig falls back to this same number for an older config.json
-# that predates the setting -- keep the two in sync if this changes.
+# Widens a held button's band by this many counts before the press is allowed
+# to end, so a reading sitting on the band edge doesn't flicker in and out of
+# match. index.js falls back to this same default for an older config.
 BUTTON_HYSTERESIS = 6
 
 # How far a reading must sit from a channel's resting value to count as a press
@@ -68,17 +59,12 @@ CAPTURE_STABLE_TOLERANCE = 3
 def restore_spi0_pinmux() -> None:
     """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
 
-    Bitbang mode claims GPIO9/10/11 as plain input/output via RPi.GPIO, which
-    clobbers their ALT0 function directly in the pin function-select registers.
-    Nothing puts it back: GPIO.cleanup() leaves them as plain inputs, and the
-    pinctrl mux is only applied when the SPI driver probes at boot. So switching
-    from software to SPI mode without a reboot leaves the SPI peripheral
-    disconnected from the pins and every read returns 0.
-
-    raspi-gpio is the only way to set an alt function -- RPi.GPIO has no API for
-    it. Setting alt functions needs root and the service runs as `volumio`, so
-    this goes via sudo (passwordless on Volumio). Re-asserting is idempotent and
-    harmless when the pins are already correct.
+    Bitbang mode claims these pins as plain GPIO via RPi.GPIO, which clobbers
+    their ALT0 function and nothing restores it -- so switching from software
+    to SPI mode without a reboot leaves the SPI peripheral disconnected and
+    every read returns 0. RPi.GPIO has no API to set an alt function, so this
+    shells out to raspi-gpio (via sudo, passwordless on Volumio). Idempotent
+    and harmless if the pins are already correct.
     """
     try:
         subprocess.run(
@@ -169,12 +155,10 @@ class Controls:
     def _new_button_state() -> Dict:
         """Per-channel tracking for the debounce/press state machine.
 
-        `press_match` and `last_match` are each an (action, spec) pair or None:
-        the press currently latched, and whatever the previous reading resolved
-        to. Both feed hysteresis -- see `_process_readings`. `press_min`/
-        `press_max` track the raw reading's range over the life of the current
-        press, and `triggered` the control queued as a result of it (if any),
-        for the press-summary log line.
+        `press_match`/`last_match` are (action, spec) pairs or None -- the
+        latched press and the previous reading's match, both feeding
+        hysteresis (see `_process_readings`). `press_min`/`press_max`/
+        `triggered` feed the press-summary log line.
         """
         return {"last_key": None, "stable_since": None, "last_sent": 0.0, "warned": False,
                 "press_match": None, "last_match": None,
@@ -207,11 +191,10 @@ class Controls:
         action_name=str  → matched button action to fire
         action_name=None → no match found; caller should log a warning
 
-        `held` is the (action, spec) already latched on this channel. Its band is
-        tried first, widened by `hysteresis` counts, so a reading that drifts
-        just past the edge of the band it is already sitting in stays with that
-        button rather than reading as a release. A real release lands on the
-        resting value, far outside the widened band, so it still gets through.
+        `held`, the (action, spec) already latched, is tried first with its band
+        widened by `hysteresis` -- so a reading drifting just past its own edge
+        stays matched rather than reading as a release. A real release lands on
+        the resting value, far outside the widened band, so it still gets through.
         """
         if held is not None and hysteresis:
             held_action, held_spec = held
@@ -250,11 +233,9 @@ class Controls:
     def _track_capture(self, state: Dict, channel: int, data: int, now: float, debounce: float) -> None:
         """Hold a reading steady before handing it to the learn flow.
 
-        Capture wants the settled value of a press, not whatever the ladder was
-        passing through as the contact closed, so a reading only counts once it
-        has stayed within CAPTURE_STABLE_TOLERANCE counts for the debounce
-        period. Anchoring on a tolerance rather than on an exact value is what
-        makes this work on raw readings, which never repeat bit-for-bit.
+        Only counts once a reading has stayed within CAPTURE_STABLE_TOLERANCE
+        counts for the debounce period -- a tolerance rather than an exact
+        match, since raw readings never repeat bit-for-bit.
         """
         anchor = state["capture_anchor"]
         if anchor is None or abs(data - anchor) > CAPTURE_STABLE_TOLERANCE:
@@ -268,11 +249,10 @@ class Controls:
     def _handle_capture_reading(self, channel: int, value: int) -> None:
         """Detect press events for the settings-page learn flow.
 
-        The first stable value seen on a channel is taken as its resting
-        (no-press) baseline. A press is any stable value sitting more than
-        CAPTURE_PRESS_MARGIN counts off that baseline; we publish once per press
-        (on the resting->pressed edge) so the settings page sees one event per
-        physical press regardless of how often it polls.
+        The first stable value on a channel is its resting baseline; a press is
+        any stable value more than CAPTURE_PRESS_MARGIN counts off it. Publishes
+        once per resting->pressed edge, so the settings page sees one event per
+        physical press regardless of poll rate.
         """
         baseline = self._capture_baseline.get(channel)
         if baseline is None:
@@ -308,14 +288,11 @@ class Controls:
     def _log_press_summary(channel: int, action: str, state: Dict, now: float) -> None:
         """Log how long a press was held, the raw range it covered, and what it triggered.
 
-        Logged once the press ends -- whether by a clean release or by drifting
-        into an unrecognised reading -- since the range only settles once the
-        hold is over. `triggered` is whichever control (if any) was actually
-        queued during this press: nothing for a short press still on cooldown,
-        or a release after a long press has already fired. At INFO rather than
-        DEBUG: it fires once per physical press (never while idle), so it's
-        cheap to leave on, and the range is exactly what's needed to tune
-        button bands/hysteresis against real hardware behaviour.
+        Logged once the press ends (clean release or drift into an unrecognised
+        reading), since the range only settles then. `triggered` is whichever
+        control actually got queued -- nothing if cooldown suppressed it. INFO
+        rather than DEBUG: fires once per press, never while idle, and the range
+        is exactly what's needed to tune bands/hysteresis against real hardware.
         """
         duration = now - (state["press_start"] or now)
         logger.info(
@@ -329,15 +306,13 @@ class Controls:
                           capture=False, hysteresis=BUTTON_HYSTERESIS):
         """Apply debounce/cooldown to a batch of raw ADC readings and emit button actions.
 
-        Debounce keys on the *resolved* button, not on the reading itself. Raw
-        10-bit readings wander by a count or two between polls, so waiting for
-        two identical readings would never settle and the press would never
-        fire; waiting for two readings that resolve to the same button settles
-        immediately and absorbs that jitter.
+        Debounce keys on the *resolved* button, not the raw reading -- readings
+        wander by a count or two between polls, so waiting for two identical
+        values would never settle, but two readings resolving to the same
+        button settles immediately and absorbs the jitter.
 
-        In capture mode each settled reading is published for the settings page
-        (so a button's value can be learned) and the normal action is suppressed
-        so pressing buttons doesn't navigate the menu.
+        In capture mode, each settled reading is published for the settings page
+        instead of acting on it, so pressing buttons doesn't navigate the menu.
         """
         for data, channel in zip(batch_data, channels):
             state = button_states[channel]
@@ -352,11 +327,10 @@ class Controls:
                 self._track_capture(state, channel, data, now, button_debounce_rate)
                 continue
 
-            # Hysteresis anchors on the latched press once there is one, and on
-            # the previous reading's match before that. Anchoring only on the
-            # latched press would be too late: a reading straddling a band edge
-            # alternates between two matches, so the debounce never settles and
-            # the press never latches in the first place.
+            # Hysteresis anchors on the latched press, or the previous reading's
+            # match before one exists -- anchoring only on the latched press is
+            # too late: a reading straddling a band edge would alternate matches
+            # and never settle enough to latch in the first place.
             held = state["press_match"] or state["last_match"]
             skipped, action, spec = self._lookup_button(
                 channel, data, parsed_btns, parsed_skips, held, hysteresis,
@@ -559,9 +533,8 @@ class Controls:
                 results.append(((adc_data[1] & 3) << 8) | adc_data[2])
             return results
 
-        # A pinmux that never took leaves MISO dead, so every raw reading is 0 --
-        # a legitimate-looking value at the bottom of the range rather than an
-        # obviously broken read, so it is worth calling out explicitly.
+        # A pinmux that never took leaves MISO dead, so every reading is 0 -- a
+        # legitimate-looking value rather than an obviously broken read, worth flagging.
         if not any(read_all(channels)):
             logger.warning(
                 "Initial SPI read was raw 0 on every channel; the MCP3008 may not be "

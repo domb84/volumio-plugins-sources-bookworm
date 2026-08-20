@@ -279,10 +279,9 @@ class Volumio:
     def _schedule_browse_refresh(self):
         """Re-browse the list currently on screen after a favourite removal.
 
-        Volumio sometimes pushes an updated list immediately after removal and
-        sometimes does not — the timer is a fallback for the latter case. If
-        _on_push_browse_library fires first it cancels this timer so we don't
-        re-browse (and potentially trigger a second go-back) unnecessarily.
+        Volumio doesn't always push an updated list after removal, so this
+        timer is the fallback -- if _on_push_browse_library fires first, it
+        cancels this timer to avoid a redundant re-browse.
         """
         uri = self._last_browse_uri
         if not uri:
@@ -346,7 +345,6 @@ class Volumio:
             # logger.debug("State: " + str(args))
             state = args[0]
 
-            # Use dictionary.get('item', None) to get an item from a dictionary and return None if it's missing rather than needing to test for the item
             status = state.get('status', None)
             position = state.get('position', None)
             title = state.get('title', None)
@@ -402,10 +400,9 @@ class Volumio:
                 self.menuManagerQ.put({'message': message})
 
             else:
-                # Deduplicate on the track text only (audio fields excluded) so a
-                # radio station re-sending the same track every few seconds — even
-                # with a jittering bitrate — doesn't re-render and restart the LCD
-                # scroll. The info button bypasses this via the force flag.
+                # Deduplicate on track text only (audio fields excluded) so a radio
+                # station re-sending the same track every few seconds -- even with
+                # a jittering bitrate -- doesn't re-render and restart the LCD scroll.
                 core_state = (status, title, artist, album, uri, service)
 
                 # wire format is a list of one
@@ -420,10 +417,9 @@ class Volumio:
                     logger.debug("State changed: %s", core_state)
                     self._schedule_info_update(result)
                 else:
-                    # Same track. Only refresh an update that's still pending (not
-                    # yet shown) so late-arriving audio details are folded into the
-                    # first render; once it has displayed, skip — a radio re-send
-                    # must not restart the scroll.
+                    # Same track: refresh only if an update is still pending (not
+                    # yet shown), folding late audio details into the first render --
+                    # once shown, skip, since a radio re-send must not restart the scroll.
                     logger.debug("Duplicate state; refreshing only if still pending")
                     self._schedule_info_update(result, only_if_pending=True)
 
@@ -436,19 +432,15 @@ class Volumio:
                               only_if_pending: bool = False) -> None:
         """Debounce rapid successive pushState calls for the same track.
 
-        Volumio often sends an initial state without audio details followed
-        immediately by the same state with bitrate/samplerate filled in.
+        Volumio often sends an initial state without audio details, then the
+        same state again moments later with bitrate/samplerate filled in.
         Holding the update briefly and replacing it if a richer one arrives
-        means only the final, complete message reaches the display.
+        means only the final message reaches the display.
 
-        When ``immediate`` is set (an explicit info-button request) the update
-        is sent straight away with a ``force`` flag so the menu manager shows
-        it without its scroll-idle deferral.
-
-        When ``only_if_pending`` is set the update is applied only if an earlier
-        update is still waiting to be shown — used to fold late-arriving audio
-        details into a not-yet-displayed message without re-rendering one that is
-        already on screen (which would restart its scroll).
+        ``immediate`` sends straight away with a ``force`` flag, skipping the
+        scroll-idle deferral (an explicit info-button request). ``only_if_pending``
+        applies only if an earlier update is still waiting to be shown, so late
+        audio details fold into it without restarting an already-visible scroll.
         """
         with self._pending_info_lock:
             if only_if_pending and self._pending_info_timer is None:
@@ -527,11 +519,10 @@ class Volumio:
 
         result = json.dumps(sources_list)
         logger.debug("%s", result)
-        # Volumio emits a spurious empty pushBrowseLibrary immediately after
-        # removeFromFavourites (regardless of remaining items). If the timer is
-        # still pending that means we haven't done the real re-browse yet, so
-        # ignore this empty push entirely and let the timer fetch the actual
-        # updated list. If we got real content, cancel the now-redundant timer.
+        # Volumio emits a spurious empty pushBrowseLibrary right after
+        # removeFromFavourites. If the refresh timer is still pending, this
+        # isn't the real re-browse yet -- ignore it and let the timer fetch the
+        # actual list. Real content means the timer is now redundant, so cancel it.
         if not sources_list and self._refresh_timer is not None:
             logger.debug("Ignoring spurious empty pushBrowseLibrary while refresh timer is pending")
             return
@@ -553,13 +544,11 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
-        # menu_manager only sorts by position at all when the *first* menu item
-        # has one (see build_menu) -- otherwise it falls back to an alphabetical
-        # sort, under which "Configuration" is early enough to land near the top
-        # regardless of what Configuration's own position is set to. Volumio's
-        # top-level source list doesn't carry positions of its own, so backfill
-        # one for every source (preserving the order they arrived in) purely to
-        # force menu_manager onto the position-sort path.
+        # menu_manager only sorts by position when the *first* item has one (see
+        # build_menu); otherwise it falls back to an alphabetical sort, where
+        # "Configuration" lands early regardless of its own position. Volumio's
+        # source list carries no positions of its own, so backfill one for every
+        # item (preserving arrival order) purely to force the position-sort path.
         if not any(item.get('position') is not None for item in sources_list):
             for index, item in enumerate(sources_list):
                 item['position'] = index

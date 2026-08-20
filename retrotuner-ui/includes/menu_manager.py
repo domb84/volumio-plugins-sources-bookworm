@@ -304,11 +304,11 @@ class MenuManager:
         self.volumioQ.put({'show': 'info'})
 
     def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
-        # clear will clear the display and not render anything after (ie for shut down)
-        # static will leave the message on screen, assuming nothing renders over it immedaitely after
-        # autoscroll will scroll the message then leave on screen
-        # force will bypass the duplicate/rate suppression so the message always shows
-        # the default will show the message, then render the menu after 2 seconds
+        # clear: clears the display and renders nothing after (for shutdown)
+        # static: leaves the message on screen with nothing rendering over it
+        # autoscroll: scrolls the message then leaves it on screen
+        # force: bypasses duplicate/rate suppression so the message always shows
+        # default: shows the message, then renders the menu after 2 seconds
 
         self.messageTime = datetime.now()
         lastMessageTime = (self.messageTime - self.lastMessageTime).total_seconds()
@@ -374,18 +374,11 @@ class MenuManager:
 
 
     def show_message(self, payload: str, force: bool = False, persist: bool = False) -> None:
-        ## Example
-        # message = []
-        # message.append({
-        #     'type': None,
-        #     'title': None,
-        #     'message': 'No media is playing'
-        # })
-        # message = json.dumps(message)
-        # self.menuManagerQ.put({'message':message})
-        # force=True  bypasses duplicate/rate suppression
-        # persist=True skips the deferred menu re-render (message stays until next interaction)
+        """Show one or more {type, title, message} toasts from a JSON list payload.
 
+        force=True bypasses duplicate/rate suppression; persist=True skips the
+        deferred menu re-render, so the message stays until the next interaction.
+        """
         logger.debug("Message input: %s", payload)
         input_data = json.loads(payload)
 
@@ -421,13 +414,11 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu: if this was a background refresh (remember=False, e.g.
-        # after deleting the last favourite) navigate up to the parent menu so
-        # the user isn't left on a stale menu showing the just-deleted item.
-        # For any other empty-menu case, tell the user and stay put.
-        # Checked before remember() so the back-button history isn't polluted,
-        # and forced past the duplicate suppression because the selected item's
-        # name has usually just been displayed by resolve_item.
+        # An empty menu after a background refresh (remember=False, e.g. deleting
+        # the last favourite) navigates up to the parent instead of showing a
+        # stale list. Otherwise just tell the user and stay put. Checked before
+        # remember() so the back-button history isn't polluted, and forced past
+        # duplicate suppression since resolve_item usually just showed this title.
         if not menu:
             if not remember:
                 previous = self.go_back()
@@ -445,11 +436,9 @@ class MenuManager:
         if self.menu is not None:
             self.menu.items = []
 
-        # sort menu by type if it wasnt sorted already
-        # Items arrive with every key present but possibly None (volumio.py
-        # always sets them), so `or ''`/`or 0` is needed rather than .get()
-        # defaults — an unnamed Spotify playlist would otherwise crash the sort
-        # and abort the whole menu build.
+        # Items arrive with every key present but possibly None, so `or ''`/`or 0`
+        # is needed rather than .get() defaults -- an unnamed Spotify playlist
+        # would otherwise crash the sort and abort the whole menu build.
         if menu and menu[0].get('position') is not None:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
