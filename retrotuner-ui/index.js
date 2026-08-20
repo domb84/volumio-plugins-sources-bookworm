@@ -117,7 +117,8 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
-            setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode'));
+            // Also new -- default matches apply_log_level()'s own fallback in index.py.
+            setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
 
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
@@ -135,8 +136,14 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
             setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
             setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            setValue(advanced, 'button_samples', self.config.get('button_samples'));
-            setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis'));
+            // Added after these two shipped, so an old on-disk config may not have
+            // them at all -- v-conf's get() then returns undefined, leaving the
+            // field blank, and a Save with nothing typed in it submits an empty
+            // string that isValid() rejects (silently, since nothing changed to
+            // draw the eye to the toast). The fallback here must match controls.py's
+            // ADC_SAMPLES/BUTTON_HYSTERESIS -- keep the two in sync if either changes.
+            setValue(advanced, 'button_samples', self.config.get('button_samples', 5));
+            setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis', 6));
             defer.resolve(uiconf);
         })
         .fail(function (error) {

@@ -199,6 +199,36 @@ class TestBrowseRefreshAfterRemoval:
         assert item["remember"] is True
 
 
+class TestPushBrowseSources:
+    """The synthetic Configuration entry must sort to the end of the sources menu."""
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v.menuManagerQ = queue.Queue()
+        return v
+
+    def _configuration_item(self, v):
+        result = json.loads(v.menuManagerQ.get_nowait()["menu"])
+        return next(item for item in result if item["title"] == "Configuration")
+
+    def test_configuration_sorts_past_the_highest_real_position(self):
+        # menu_manager sorts by `position or 0`; a bare None here would tie
+        # Configuration for position 0, landing it above sources numbered 1+.
+        v = self._volumio()
+        v._on_push_browse_sources([
+            {"name": "Music Library", "plugin_type": "music_service", "plugin_name": "mpd", "position": 1},
+            {"name": "Webradio", "plugin_type": "music_service", "plugin_name": "webradio", "position": 2},
+        ])
+        assert self._configuration_item(v)["position"] == 3
+
+    def test_configuration_stays_unpositioned_when_no_source_has_a_position(self):
+        v = self._volumio()
+        v._on_push_browse_sources([
+            {"name": "Music Library", "plugin_type": "music_service", "plugin_name": "mpd", "position": None},
+        ])
+        assert self._configuration_item(v)["position"] is None
+
+
 class TestButtonRouting:
     """_process_button_item routes named actions to the correct handler."""
 

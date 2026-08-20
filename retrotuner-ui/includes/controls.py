@@ -46,12 +46,16 @@ MIN_POLL = 0.05
 # which discards a read corrupted by an LCD strobe rather than averaging its
 # error in. Mind the cost before raising it: one read is 3 bytes, so at
 # SPI_CLOCK_HZ each costs 480us and a 5-sample two-channel poll spends ~4.8ms on
-# the wire -- a tenth of the 50ms interval, in one contiguous burst.
+# the wire -- a tenth of the 50ms interval, in one contiguous burst. index.js's
+# getUIConfig falls back to this same number when an older config.json predates
+# the setting -- keep the two in sync if this changes.
 ADC_SAMPLES = 5
 
 # Once a button has matched, its band is widened by this many counts before the
 # press is allowed to end. Without it a reading sitting on a band edge flickers
 # in and out of the match and reads as a stream of press/release pairs.
+# index.js's getUIConfig falls back to this same number for an older config.json
+# that predates the setting -- keep the two in sync if this changes.
 BUTTON_HYSTERESIS = 6
 
 # How far a reading must sit from a channel's resting value to count as a press
