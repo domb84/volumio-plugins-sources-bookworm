@@ -12,10 +12,8 @@ echo "Uninstalling retrotuner-ui Dependencies"
 # Make sure the plugin service is stopped before its unit file is removed.
 systemctl stop retrotuner-ui.service 2>/dev/null || true
 
-# Remove the apt packages installed by install.sh. python3-venv is left in
-# place: it is part of the base python toolchain and other plugins or system
-# tools may depend on it.
-apt-get remove -y pigpio python3-dev
+# Remove the apt packages installed by install.sh.
+apt-get remove -y pigpio python3-rpi.gpio python3-spidev
 
 # Remove the python virtual environment (all python deps live in here)
 rm -rf "${VENV_PARENT}"

@@ -14,22 +14,33 @@ VENV_DIR="/data/retrotuner-ui/venv"
 
 echo "Installing retrotuner-ui Dependencies"
 apt-get update
-# System packages: the pigpio daemon, headers for building the native python
-# wheels (RPi.GPIO/spidev/pigpio), and venv support. python3-pip is not needed:
-# the venv bootstraps its own pip via ensurepip (provided by python3-venv).
-#
-# --force-overwrite works around a current Raspberry Pi OS packaging conflict:
-# raspberrypi-sys-mods and the upstream libpython3.11-stdlib package both ship
-# /usr/lib/python3.11/EXTERNALLY-MANAGED (the PEP 668 marker) without either
-# declaring Replaces: for the other, so dpkg refuses to unpack it and aborts
-# the whole install. Both copies are the same trivial marker file, so
-# overwriting is safe regardless of which package "wins" it.
-apt-get -y -o Dpkg::Options::="--force-overwrite" install pigpio python3-dev python3-venv
 
-# Create an isolated virtual environment for the plugin so its python
-# dependencies never clash with the system / other plugins.
+# RPi.GPIO and spidev are the only requirements.txt packages that need
+# compiling (everything else is pure Python) -- getting them prebuilt via apt
+# instead avoids needing python3-dev at all. That matters because
+# python3-dev/python3-venv are version-locked (`=`) to the exact python3.11
+# build already on this image, so requesting them drags apt into upgrading
+# python3.11/libc6/locales to match -- which previously triggered a mass
+# service restart (needrestart, or the classic libc6 postinst prompt) that
+# broke playback and crash-looped upmpdcli. python3-rpi.gpio/python3-spidev
+# are ordinary application packages, so they depend on python3 by a normal
+# range (any 3.11.x) rather than an exact pin, and don't drag in that upgrade.
+apt-get -y --no-install-recommends install pigpio python3-rpi.gpio python3-spidev
+
+# Create an isolated virtual environment for the plugin's remaining pure-
+# Python dependencies, so they never clash with the system / other plugins.
+# --system-site-packages lets it see the apt-installed RPi.GPIO/spidev above,
+# so nothing needs compiling inside the venv.
+#
+# Uses virtualenv (as a standalone zipapp, needing no install of its own)
+# rather than the stdlib `venv` module specifically to avoid the python3-venv
+# package -- same exact-version-lock problem as python3-dev above. virtualenv
+# also bundles its own pip, so it doesn't need python3-venv's ensurepip either.
 echo "Creating python virtual environment in ${VENV_DIR}"
-python3 -m venv "${VENV_DIR}"
+VIRTUALENV_PYZ="/tmp/virtualenv.pyz"
+wget -qO "${VIRTUALENV_PYZ}" https://bootstrap.pypa.io/virtualenv.pyz
+python3 "${VIRTUALENV_PYZ}" --system-site-packages "${VENV_DIR}"
+rm -f "${VIRTUALENV_PYZ}"
 
 # Install the python requirements into the venv.
 echo "Installing python requirements into the virtual environment"
