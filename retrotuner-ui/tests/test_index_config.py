@@ -41,22 +41,9 @@ def test_load_button_config_does_not_include_btn_stop():
 
 # --- Optional buttons (absent → omitted, present → included) ---
 
-def test_load_button_config_omits_remove_favourite_when_absent():
-    cfg = {key: {"value": "0,12"} for key in _BUTTON_KEYS}
-    assert "btn_remove_favourite" not in index.load_button_config(cfg)
-
-
-def test_load_button_config_includes_remove_favourite_when_present():
-    cfg = {key: {"value": "0,12"} for key in _BUTTON_KEYS}
-    cfg["btn_remove_favourite"] = {"value": "0,20"}
-    result = index.load_button_config(cfg)
-    assert result["btn_remove_favourite"] == ("0", "20")
-
-
 @pytest.mark.parametrize("key,value", [
     ("btn_pause", "0,14"),
     ("btn_sleep_timer", "0,18"),
-    ("btn_cancel_sleep_timer", "7,20"),
     ("btn_dimmer", "0,20"),
 ])
 def test_optional_button_omitted_when_absent(key, value):
@@ -67,7 +54,6 @@ def test_optional_button_omitted_when_absent(key, value):
 @pytest.mark.parametrize("key,value", [
     ("btn_pause", "0,14"),
     ("btn_sleep_timer", "0,18"),
-    ("btn_cancel_sleep_timer", "7,20"),
     ("btn_dimmer", "0,20"),
 ])
 def test_optional_button_included_when_present(key, value):

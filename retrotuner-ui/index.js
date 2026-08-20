@@ -147,9 +147,7 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(advanced, 'btn_no_press_channel1', self.config.get('btn_no_press_channel1'));
             setValue(advanced, 'btn_no_press_channel2', self.config.get('btn_no_press_channel2'));
             setValue(advanced, 'btn_pause', self.config.get('btn_pause'));
-            setValue(advanced, 'btn_remove_favourite', self.config.get('btn_remove_favourite'));
             setValue(advanced, 'btn_sleep_timer', self.config.get('btn_sleep_timer'));
-            setValue(advanced, 'btn_cancel_sleep_timer', self.config.get('btn_cancel_sleep_timer'));
             setValue(advanced, 'btn_dimmer', self.config.get('btn_dimmer'));
             defer.resolve(uiconf);
         })
@@ -291,9 +289,7 @@ var CAPTURE_LABELS = {
     btn_info: 'Info',
     btn_favourite: 'Favourite',
     btn_pause: 'Pause/Play',
-    btn_remove_favourite: 'Remove Favourite',
     btn_sleep_timer: 'Sleep Timer',
-    btn_cancel_sleep_timer: 'Cancel Sleep Timer',
     btn_dimmer: 'Dimmer',
     btn_main_menu: 'Main Menu',
     btn_back: 'Back'
@@ -334,9 +330,7 @@ retrotunerui.prototype.captureBtnSpotify = function () { return this.startCaptur
 retrotunerui.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
 retrotunerui.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
 retrotunerui.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
-retrotunerui.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
 retrotunerui.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
-retrotunerui.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
 retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };

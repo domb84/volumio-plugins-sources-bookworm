@@ -76,9 +76,9 @@ class MenuManager:
             'btn_info': lambda: self.volumioQ.put({'show': 'info'}),
             'btn_spotify': lambda: self.volumioQ.put({'button': 'spotify'}),
             'btn_favourite': self.add_favorite,
-            'btn_remove_favourite': self.remove_favorite,
+            'btn_favourite_long': self.remove_favorite,
             'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
-            'btn_cancel_sleep_timer': self._cancel_sleep_timer,
+            'btn_sleep_timer_long': self._cancel_sleep_timer,
             'btn_dimmer': lambda: self._display.toggle(),
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
         }
