@@ -221,12 +221,20 @@ class TestPushBrowseSources:
         ])
         assert self._configuration_item(v)["position"] == 3
 
-    def test_configuration_stays_unpositioned_when_no_source_has_a_position(self):
+    def test_configuration_still_sorts_last_when_no_source_has_a_position(self):
+        # This is the real-world case: Volumio's top-level source list doesn't
+        # carry positions at all. Without a backfill, menu_manager falls back to
+        # its alphabetical sort, where "Configuration" sorts early regardless of
+        # its own position -- so real sources must get sequential positions too,
+        # to force menu_manager onto the position-sort path in the first place.
         v = self._volumio()
         v._on_push_browse_sources([
             {"name": "Music Library", "plugin_type": "music_service", "plugin_name": "mpd", "position": None},
+            {"name": "Webradio", "plugin_type": "music_service", "plugin_name": "webradio", "position": None},
         ])
-        assert self._configuration_item(v)["position"] is None
+        result = json.loads(v.menuManagerQ.get_nowait()["menu"])
+        assert [item["title"] for item in result] == ["Music Library", "Webradio", "Configuration"]
+        assert [item["position"] for item in result] == [0, 1, 2]
 
 
 class TestButtonRouting:

@@ -553,13 +553,18 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
-        # menu_manager sorts a positioned menu by `position or 0`, so a bare
-        # None here ties Configuration for position 0 -- below any real source
-        # numbered 0, but above everything numbered 1+, which reads as "stuck at
-        # the top". Placing it one past the highest real position keeps it last
-        # regardless of where the sources actually start numbering from.
+        # menu_manager only sorts by position at all when the *first* menu item
+        # has one (see build_menu) -- otherwise it falls back to an alphabetical
+        # sort, under which "Configuration" is early enough to land near the top
+        # regardless of what Configuration's own position is set to. Volumio's
+        # top-level source list doesn't carry positions of its own, so backfill
+        # one for every source (preserving the order they arrived in) purely to
+        # force menu_manager onto the position-sort path.
+        if not any(item.get('position') is not None for item in sources_list):
+            for index, item in enumerate(sources_list):
+                item['position'] = index
         positions = [item['position'] for item in sources_list if item.get('position') is not None]
-        config_position = max(positions) + 1 if positions else None
+        config_position = max(positions) + 1 if positions else 0
         sources_list.append({'title': 'Configuration', 'uri': 'system://config', 'service': None, 'type': 'folder', 'position': config_position})
         result = json.dumps(sources_list)
         logger.debug(result)
