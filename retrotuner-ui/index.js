@@ -8,6 +8,20 @@ var exec = require('child_process').exec;
 // restart (capture/settings save) apart from a genuine stop/shutdown.
 var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
+// SPI mode does nothing without this line enabling the kernel driver -- and
+// nothing here can add it for the user without root, so the best available
+// fix is flagging it clearly (see saveOptions).
+var USERCONFIG_PATH = '/boot/userconfig.txt';
+
+function isSpiEnabledInUserConfig() {
+    try {
+        var contents = fs.readFileSync(USERCONFIG_PATH, 'utf8');
+        return /^\s*dtparam\s*=\s*spi\s*=\s*on\s*$/m.test(contents);
+    } catch (e) {
+        return false;
+    }
+}
+
 
 module.exports = retrotunerui;
 function retrotunerui(context) {
@@ -206,7 +220,21 @@ retrotunerui.prototype.saveOptions = function (data) {
     self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    if (spiModeChanged) {
+    if (spiModeChanged && Boolean(data.spi) && !isSpiEnabledInUserConfig()) {
+        // Rebooting won't fix anything if the kernel driver was never enabled --
+        // that needs a manual edit, so don't offer a "Restart Now" that would
+        // just be a dead end.
+        self.commandRouter.broadcastMessage('openModal', {
+            title: 'SPI Mode Enabled -- Boot Config Missing',
+            message: 'SPI mode is enabled here, but ' + USERCONFIG_PATH + ' does not have ' +
+                '"dtparam=spi=on". Add that line (via SSH), then reboot -- otherwise ' +
+                'button reads will come back as a constant 0.',
+            size: 'lg',
+            buttons: [
+                { name: 'OK', class: 'btn btn-default' }
+            ]
+        });
+    } else if (spiModeChanged) {
         // Same shape as Volumio's own "I2S DAC enabled" prompt: a modal with a
         // one-click restart, since a plugin restart can't apply this change.
         self.commandRouter.broadcastMessage('openModal', {
