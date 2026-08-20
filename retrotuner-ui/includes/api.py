@@ -21,7 +21,13 @@ class ApiWrapper:
             self.shared_queue.put(data)
             return {'message': 'Data received successfully!'}
 
-    def run_app(self, host: str = '0.0.0.0', port: int = 8889, stop_event: Optional[threading.Event] = None) -> None:
+    def run_app(self, host: str = '127.0.0.1', port: int = 8889, stop_event: Optional[threading.Event] = None) -> None:
+        """Serve the POST listener.
+
+        Bound to loopback: anything posted here lands on the control queue and
+        drives the menu, and the menu can reach shutdown/restart. On 0.0.0.0
+        that is an unauthenticated power switch for anyone on the network.
+        """
         # Use programmatic Server so we can stop it cleanly
         config = Config(app=self.app, host=host, port=port, log_level='info')
         server = Server(config=config)

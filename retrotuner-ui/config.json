@@ -43,6 +43,14 @@
         "type": "number",
         "value": "500"
     },
+    "button_samples": {
+        "type": "number",
+        "value": "5"
+    },
+    "button_hysteresis": {
+        "type": "number",
+        "value": "6"
+    },
     "rot_enc_A": {
         "type": "number",
         "value": "17"
@@ -130,5 +138,9 @@
     "btn_no_press_channel2": {
         "type": "text",
         "value": "7, 16"
+    },
+    "log_level": {
+        "type": "string",
+        "value": "INFO"
     }
 }

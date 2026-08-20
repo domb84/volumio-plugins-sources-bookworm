@@ -25,3 +25,10 @@ def parse_button_config(cfg: Dict[str, Any]) -> List[Tuple[str, int, Tuple[str, 
         else:
             parsed.append((name, ch, ('value', int(data))))
     return parsed
+
+
+def spec_contains(spec: Tuple, value: int, margin: int = 0) -> bool:
+    """Whether `value` falls in `spec`, widened by `margin` counts each side."""
+    if spec[0] == 'range':
+        return (spec[1] - margin) <= value <= (spec[2] + margin)
+    return abs(value - spec[1]) <= margin

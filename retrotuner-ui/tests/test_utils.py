@@ -1,5 +1,5 @@
-"""Tests for includes/utils.py: parse_button_config."""
-from includes.utils import parse_button_config
+"""Tests for includes/utils.py: parse_button_config and the raw-value helpers."""
+from includes.utils import parse_button_config, spec_contains
 
 
 def test_single_value():
@@ -39,3 +39,23 @@ def test_multiple_buttons():
     assert ("a", 0, ("value", 12)) in result
     assert ("b", 1, ("range", 20, 22)) in result
     assert len(result) == 2
+
+
+class TestSpecContains:
+    def test_value_spec_is_exact_without_margin(self):
+        assert spec_contains(("value", 340), 340)
+        assert not spec_contains(("value", 340), 341)
+
+    def test_value_spec_widens_by_margin(self):
+        assert spec_contains(("value", 340), 346, margin=6)
+        assert not spec_contains(("value", 340), 347, margin=6)
+
+    def test_range_spec_is_inclusive(self):
+        assert spec_contains(("range", 320, 352), 320)
+        assert spec_contains(("range", 320, 352), 352)
+        assert not spec_contains(("range", 320, 352), 353)
+
+    def test_range_spec_widens_by_margin_on_both_sides(self):
+        assert spec_contains(("range", 320, 352), 314, margin=6)
+        assert spec_contains(("range", 320, 352), 358, margin=6)
+        assert not spec_contains(("range", 320, 352), 359, margin=6)

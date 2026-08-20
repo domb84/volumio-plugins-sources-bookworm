@@ -1,4 +1,6 @@
 #!/bin/bash
+# -x to trace, -e so a failed step is visible rather than silently skipped.
+set -xe
 
 PLUGIN_DIR="/data/plugins/user_interface/retrotuner-ui"
 # Venv lives outside the plugin directory (see install.sh).

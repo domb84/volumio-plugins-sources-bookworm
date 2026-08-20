@@ -1,6 +1,12 @@
 [Unit]
 Description=retrotuner-ui
-After=volumio.service
+# pigpiod is required for the rotary encoder. index.js starts it before this
+# service, but a bare `systemctl start retrotuner-ui` would otherwise race it.
+After=volumio.service pigpiod.service
+Wants=pigpiod.service
+# Without a limit, a config error that exits non-zero restart-loops forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 User=volumio
