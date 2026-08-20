@@ -1,5 +1,6 @@
 """Tests for the config-parsing helpers in index.py."""
 import json
+import logging
 
 import pytest
 
@@ -82,3 +83,25 @@ def test_load_config_reads_json(tmp_path):
 def test_load_config_missing_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         index.load_config(tmp_path / "does-not-exist.json")
+
+
+class TestApplyLogLevel:
+    """debug_mode is a plain switch: on -> DEBUG, off/absent -> INFO."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_root_level(self):
+        original = logging.getLogger().level
+        yield
+        logging.getLogger().setLevel(original)
+
+    def test_defaults_to_info_when_absent(self):
+        index.apply_log_level({})
+        assert logging.getLogger().getEffectiveLevel() == logging.INFO
+
+    def test_false_sets_info(self):
+        index.apply_log_level({"debug_mode": {"value": False}})
+        assert logging.getLogger().getEffectiveLevel() == logging.INFO
+
+    def test_true_sets_debug(self):
+        index.apply_log_level({"debug_mode": {"value": True}})
+        assert logging.getLogger().getEffectiveLevel() == logging.DEBUG

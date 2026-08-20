@@ -101,11 +101,6 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(pins, 'buttons_cs', self.config.get('buttons_cs'));
             setValue(pins, 'buttons_channel1', self.config.get('buttons_channel1'));
             setValue(pins, 'buttons_channel2', self.config.get('buttons_channel2'));
-            setValue(pins, 'button_poll_rate', self.config.get('button_poll_rate'));
-            setValue(pins, 'button_debounce_rate', self.config.get('button_debounce_rate'));
-            setValue(pins, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            setValue(pins, 'button_samples', self.config.get('button_samples'));
-            setValue(pins, 'button_hysteresis', self.config.get('button_hysteresis'));
 
             // Capture section: action buttons have no stored values, but we
             // rewrite each "Configure" label to show its current mapping so the
@@ -122,7 +117,7 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
-            setValue(section('diagnostics'), 'log_level', self.config.get('log_level'));
+            setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode'));
 
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
@@ -136,19 +131,12 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(lcd, 'lcd_d6', self.config.get('lcd_d6'));
             setValue(lcd, 'lcd_d7', self.config.get('lcd_d7'));
 
-            const advanced = section('button_resistance');
-            setValue(advanced, 'btn_enter', self.config.get('btn_enter'));
-            setValue(advanced, 'btn_radio', self.config.get('btn_radio'));
-            setValue(advanced, 'btn_spotify', self.config.get('btn_spotify'));
-            setValue(advanced, 'btn_info', self.config.get('btn_info'));
-            setValue(advanced, 'btn_favourite', self.config.get('btn_favourite'));
-            setValue(advanced, 'btn_main_menu', self.config.get('btn_main_menu'));
-            setValue(advanced, 'btn_back', self.config.get('btn_back'));
-            setValue(advanced, 'btn_no_press_channel1', self.config.get('btn_no_press_channel1'));
-            setValue(advanced, 'btn_no_press_channel2', self.config.get('btn_no_press_channel2'));
-            setValue(advanced, 'btn_pause', self.config.get('btn_pause'));
-            setValue(advanced, 'btn_sleep_timer', self.config.get('btn_sleep_timer'));
-            setValue(advanced, 'btn_dimmer', self.config.get('btn_dimmer'));
+            const advanced = section('button_advanced');
+            setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
+            setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
+            setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
+            setValue(advanced, 'button_samples', self.config.get('button_samples'));
+            setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis'));
             defer.resolve(uiconf);
         })
         .fail(function (error) {
@@ -162,46 +150,15 @@ retrotunerui.prototype.getUIConfig = function() {
 retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
-    // Function to check if a value is numeric, boolean, or a button mapping
-    function isValid(value, key) {
-        // Check if the value is a boolean
+    // Every field saved through this form is either a switch (spi, debug_mode)
+    // or a plain numeric setting (a GPIO pin or a rate) -- button mappings are
+    // only ever written by the capture flow (self.config.set() below), which
+    // bypasses this validation entirely, so no button-mapping grammar needs
+    // handling here.
+    function isValid(value) {
         if (typeof value === 'boolean') {
             return true;
         }
-
-        // log_level is the one free-text setting; everything else is numeric,
-        // boolean or a button mapping.
-        if (key === 'log_level') {
-            return typeof value === 'string' &&
-                /^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$/i.test(value.trim());
-        }
-
-        // Check if the value is a comma-separated list of numbers
-        if (typeof value === 'string' && value.match(/^\s*(\d+\s*,\s*)*\d+\s*$/)) {
-            return true;
-        }
-
-        // A button mapping range, "channel, low-high". Ranges are the normal
-        // shape now that matching runs on raw ADC counts, so the Advanced
-        // section has to be able to save one. The plain "channel, value" form is
-        // already accepted by the comma-separated check above. Reuses
-        // parseButtonMapping (below) rather than a second regex, so the accepted
-        // grammar can't drift out of sync between validation and parsing.
-        if (typeof value === 'string') {
-            const parsed = parseButtonMapping(value);
-            if (parsed && parsed.type === 'range') {
-                return true;
-            }
-        }
-
-        // An empty value clears a button mapping. Scoped to btn_* keys only --
-        // every other key is a required numeric setting (a GPIO pin, a rate) and
-        // an empty string there would crash the service on next start.
-        if (value === '' && key.indexOf('btn_') === 0) {
-            return true;
-        }
-
-        // Check if the value is a single numeric value
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
 
@@ -218,12 +175,11 @@ retrotunerui.prototype.saveOptions = function (data) {
         if (jsonObject.hasOwnProperty(key)) {
             const value = jsonObject[key];
             // console.log(`${key}: ${value}`);
-            if (isValid(value, key)) {
-                // console.log(`${value} is a valid number, comma seperated numbers or boolean. Saving ${key}.`);
+            if (isValid(value)) {
                 self.config.set(key, value);
             } else {
-                self.logger.error(`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`);
-                this.commandRouter.pushToastMessage('fail', ("RetroTuner UI"), (`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`));
+                self.logger.error(`${value} is not a valid number or boolean. Not saving ${key}.`);
+                this.commandRouter.pushToastMessage('fail', ("RetroTuner UI"), (`${value} is not a valid number or boolean. Not saving ${key}.`));
             }
         }
     }

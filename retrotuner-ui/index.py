@@ -24,17 +24,12 @@ logging.getLogger("engineio").setLevel(logging.WARNING)
 def apply_log_level(config_data: Dict[str, Any]) -> None:
     """Set the root level from config, so DEBUG reaches every module's logger.
 
-    Previously only this module's logger was forced to DEBUG, which left the
-    per-module loggers ("Controls", "Menu Manager", ...) inheriting the root
-    INFO level -- so the raw ADC readings logged while tuning button values
-    could never actually appear.
+    Set on the root rather than just this module's logger, so the per-module
+    loggers ("Controls", "Menu Manager", ...) also pick it up -- otherwise the
+    raw ADC readings logged while tuning button values could never appear.
     """
-    name = str(config_data.get("log_level", {}).get("value", "INFO") or "INFO").upper()
-    level = getattr(logging, name, None)
-    if not isinstance(level, int):
-        logger.warning("Unknown log_level %r; falling back to INFO", name)
-        level = logging.INFO
-    logging.getLogger().setLevel(level)
+    debug = bool(config_data.get("debug_mode", {}).get("value", False))
+    logging.getLogger().setLevel(logging.DEBUG if debug else logging.INFO)
 
 stop_event = threading.Event()
 

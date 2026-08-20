@@ -131,8 +131,8 @@
         "type": "text",
         "value": "7, 998-1023"
     },
-    "log_level": {
-        "type": "string",
-        "value": "INFO"
+    "debug_mode": {
+        "type": "boolean",
+        "value": false
     }
 }
