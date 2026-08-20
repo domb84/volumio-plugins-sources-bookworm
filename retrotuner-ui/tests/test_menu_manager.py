@@ -1,7 +1,9 @@
 """Tests for includes/menu_manager.py: the restart-marker gate and menu building."""
 import json
 import os
+import queue
 import time
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 from includes import menu_manager as mm
@@ -104,3 +106,91 @@ class TestBuildMenuNoneFields:
         ]))
         assert m.menu.append_item.call_count == 2
         m.menu.render.assert_called_once()
+
+
+_TRACK_INFO_PAYLOAD = json.dumps([{
+    'status': 'play', 'artist': 'Artist', 'title': 'Title', 'album': 'Album',
+    'bitrate': '320', 'bitdepth': '16',
+}])
+
+
+class TestNavMode:
+    """The rotary encoder scrolls the menu in nav mode, and skips tracks once
+    the screen has fallen back to showing what's playing (see _nav_mode)."""
+
+    def _manager(self):
+        m = _bare_manager()
+        m.volumioQ = queue.Queue()
+        m._nav_mode = True
+        return m
+
+    def test_menu_up_scrolls_in_nav_mode(self):
+        m = self._manager()
+        m._menu_up()
+        m.menu.processDown.assert_called_once()
+        assert m.volumioQ.empty()
+
+    def test_menu_down_scrolls_in_nav_mode(self):
+        m = self._manager()
+        m._menu_down()
+        m.menu.processUp.assert_called_once()
+        assert m.volumioQ.empty()
+
+    def test_menu_up_skips_forward_once_out_of_nav_mode(self):
+        m = self._manager()
+        m._nav_mode = False
+        m._menu_up()
+        assert m.volumioQ.get_nowait() == {'button': 'next'}
+        m.menu.processDown.assert_not_called()
+
+    def test_menu_down_skips_back_once_out_of_nav_mode(self):
+        m = self._manager()
+        m._nav_mode = False
+        m._menu_down()
+        assert m.volumioQ.get_nowait() == {'button': 'prev'}
+        m.menu.processUp.assert_not_called()
+
+    def test_show_track_info_leaves_nav_mode(self):
+        m = self._manager()
+        m.show_track_info(_TRACK_INFO_PAYLOAD)
+        assert m._nav_mode is False
+
+    def test_build_menu_restores_nav_mode(self):
+        m = self._manager()
+        m._nav_mode = False
+        m.build_menu(json.dumps([{'title': 'Radio', 'uri': 'radio', 'service': 'webradio', 'type': 'folder'}]))
+        assert m._nav_mode is True
+
+    def test_render_menu_restores_nav_mode_and_renders(self):
+        m = self._manager()
+        m._nav_mode = False
+        m._render_menu()
+        assert m._nav_mode is True
+        m.menu.render.assert_called_once()
+
+
+def _display_manager():
+    """A manager with the real display_message/show_message, not mocked out."""
+    m = mm.MenuManager.__new__(mm.MenuManager)
+    m.menu = Mock()
+    m.lastMessage = ""
+    m.lastMessageTime = datetime.now() - timedelta(seconds=10)
+    m._pending_render_timer = None
+    m._schedule_deferred = Mock()
+    return m
+
+
+class TestMenuRevertUsesRenderMenu:
+    """Both toast-revert paths must restore nav mode, not just call menu.render()
+    directly -- otherwise the encoder could keep skipping tracks over a menu
+    it can no longer see (e.g. 'No media is playing' reverting to a stale menu)."""
+
+    def test_display_message_default_branch_reverts_via_render_menu(self):
+        m = _display_manager()
+        m.display_message("hello")
+        m._schedule_deferred.assert_called_once_with(m._render_menu)
+
+    def test_show_message_reverts_via_render_menu(self):
+        m = _display_manager()
+        m.show_message(json.dumps([{'message': 'No media is playing'}]))
+        m._schedule_deferred.assert_called_once_with(m._render_menu)

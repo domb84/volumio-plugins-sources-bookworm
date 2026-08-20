@@ -158,6 +158,16 @@ class Volumio:
             logger.debug("%s", button)
             return
 
+        if button == 'next':
+            self._send('next')
+            logger.debug("%s", button)
+            return
+
+        if button == 'prev':
+            self._send('prev')
+            logger.debug("%s", button)
+            return
+
         if self.SAFE_MENU_ITEM_REGEX.match(button):
             self.get_sources(button)
             logger.debug("%s", button)

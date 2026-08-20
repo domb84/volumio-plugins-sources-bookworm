@@ -261,3 +261,24 @@ class TestButtonRouting:
         v._process_button_item('stop')
         v._process_button_item('stop_and_clear')
         assert v.stop.call_count == 2
+
+    def test_next_sends_next(self):
+        v = self._volumio()
+        v._send = Mock()
+        v._process_button_item('next')
+        v._send.assert_called_once_with('next')
+
+    def test_prev_sends_prev(self):
+        v = self._volumio()
+        v._send = Mock()
+        v._process_button_item('prev')
+        v._send.assert_called_once_with('prev')
+
+    def test_next_does_not_fall_through_to_browse_library(self):
+        # 'next'/'prev' match SAFE_MENU_ITEM_REGEX, so they must be handled
+        # before that catch-all or they'd be treated as a browse URI.
+        v = self._volumio()
+        v._send = Mock()
+        v.get_sources = Mock()
+        v._process_button_item('next')
+        v.get_sources.assert_not_called()

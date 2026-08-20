@@ -47,6 +47,13 @@ class MenuManager:
         self._idle_timer: Optional[threading.Timer] = None
         self._current_context: Optional[str] = None
 
+        # True while the rotary encoder scrolls the menu; False once the screen
+        # has fallen back to showing what's playing, where it skips tracks
+        # instead. Only ever set alongside an actual LCD write (menu.render() or
+        # menu.message() in show_track_info) so it always matches what's really
+        # on screen -- see build_menu, _render_menu and show_track_info.
+        self._nav_mode = True
+
     def run(self):
         """Claim the display and service the queues until stopped. Thread entry point.
 
@@ -66,8 +73,8 @@ class MenuManager:
 
         # define control actions
         self.control_actions = {
-            'menu_up': self.menu.processDown,
-            'menu_down': self.menu.processUp,
+            'menu_up': self._menu_up,
+            'menu_down': self._menu_down,
             'btn_main_menu': lambda: self.volumioQ.put({'button': 'menu'}),
             'btn_enter': self.menu.processEnter,
             'btn_radio': lambda: self.volumioQ.put({'button': 'radio'}),
@@ -186,6 +193,32 @@ class MenuManager:
         if len(self.last_10_items) > 1:
             return self.last_10_items.popleft()
         return None
+
+    def _menu_up(self) -> None:
+        """Scroll the menu in nav mode; skip to the next track once we've
+        fallen back to the now-playing screen."""
+        if self._nav_mode:
+            self.menu.processDown()
+        else:
+            self.volumioQ.put({'button': 'next'})
+
+    def _menu_down(self) -> None:
+        """Scroll the menu in nav mode; skip to the previous track once we've
+        fallen back to the now-playing screen."""
+        if self._nav_mode:
+            self.menu.processUp()
+        else:
+            self.volumioQ.put({'button': 'prev'})
+
+    def _render_menu(self) -> None:
+        """Re-render the current menu and restore the rotary encoder to nav mode.
+
+        Used wherever the menu can reappear without going through build_menu --
+        e.g. a toast's deferred revert -- so nav mode always matches what a
+        render actually just put on screen.
+        """
+        self._nav_mode = True
+        self.menu.render()
 
     def _selected_favourite(self) -> Optional[str]:
         """Return JSON {title, uri, service} for the highlighted menu item.
@@ -335,7 +368,7 @@ class MenuManager:
                     self.menu.message(message.upper())
                     self.lastMessageTime = datetime.now()
                     self.lastMessage = message
-                    self._schedule_deferred(self.menu.render)
+                    self._schedule_deferred(self._render_menu)
                     return
 
             return self
@@ -367,6 +400,7 @@ class MenuManager:
                 second_line = '/'.join(x for x in [album, quality] if x)
 
                 message = f"{first_line}\n{second_line}"
+                self._nav_mode = False  # rotary now skips tracks instead of scrolling
                 self.display_message(message, autoscroll=True)
 
         except Exception as e:
@@ -394,7 +428,7 @@ class MenuManager:
 
                 self.display_message(message, autoscroll=True, force=force)
                 if not persist:
-                    self._schedule_deferred(self.menu.render)
+                    self._schedule_deferred(self._render_menu)
             except Exception as e:
                 logger.error("Failed to process message: %s", e)
 
@@ -481,6 +515,9 @@ class MenuManager:
                 logger.error("Failed to process menu input: %s", e)
         
         self.menu.current_option = index
+
+        # A real menu is now on screen, so the rotary encoder scrolls it again.
+        self._nav_mode = True
 
         # return rendered menu
         # if you do not return the menu it will render the original one again
