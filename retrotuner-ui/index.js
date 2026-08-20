@@ -155,6 +155,12 @@ retrotunerui.prototype.getUIConfig = function() {
 retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
+    // Captured before the save loop below overwrites it. A plugin restart
+    // can't apply this -- the pin mux is only reapplied when the SPI driver
+    // probes at boot -- so this is flagged separately from the usual restart.
+    const spiModeChanged = data.hasOwnProperty('spi') &&
+        Boolean(data.spi) !== Boolean(self.config.get('spi'));
+
     // Every field saved through this form is either a switch (spi, debug_mode)
     // or a plain numeric setting (a GPIO pin or a rate) -- button mappings are
     // only ever written by the capture flow (self.config.set() below), which
@@ -191,6 +197,11 @@ retrotunerui.prototype.saveOptions = function (data) {
     
     self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
+
+    if (spiModeChanged) {
+        self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
+            'SPI mode changed -- reboot the device for this to take effect (a plugin restart is not enough).');
+    }
 
     if (self._checkButtonConflicts()) {
         self.logger.info('RetroTuner UI - restarting services');

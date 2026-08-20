@@ -3,7 +3,6 @@ import pigpio
 import spidev
 import json
 import os
-import subprocess
 import threading
 import time
 import logging
@@ -54,29 +53,6 @@ BUTTON_HYSTERESIS = 6
 # still count as the same reading while it settles.
 CAPTURE_PRESS_MARGIN = 10
 CAPTURE_STABLE_TOLERANCE = 3
-
-
-def restore_spi0_pinmux() -> None:
-    """Re-assert the ALT0 (SPI0) function on the hardware SPI pins.
-
-    Bitbang mode claims these pins as plain GPIO via RPi.GPIO, which clobbers
-    their ALT0 function and nothing restores it -- so switching from software
-    to SPI mode without a reboot leaves the SPI peripheral disconnected and
-    every read returns 0. RPi.GPIO has no API to set an alt function, so this
-    shells out to raspi-gpio (via sudo, passwordless on Volumio). Idempotent
-    and harmless if the pins are already correct.
-    """
-    try:
-        subprocess.run(
-            ["sudo", "-n", "raspi-gpio", "set", SPI0_PINS, "a0"],
-            check=True, capture_output=True,
-        )
-        logger.debug("Re-asserted ALT0 on SPI0 pins %s", SPI0_PINS)
-    except Exception as e:
-        logger.warning(
-            "Could not re-assert ALT0 on SPI0 pins (%s). If button reads come back "
-            "as a constant value, run `sudo raspi-gpio set %s a0` or reboot.", e, SPI0_PINS,
-        )
 
 
 @dataclass
@@ -510,8 +486,6 @@ class Controls:
                               button_poll_rate, button_debounce_rate, button_cooldown_rate)
 
     def buttons_spi(self, spi_bus, butCS, but1, but2, btn_config, btn_skip_config, button_poll_rate=10, button_debounce_rate=50, button_cooldown_rate=500):
-        restore_spi0_pinmux()
-
         spi = spidev.SpiDev()
         spi.open(0, spi_bus)
         spi.no_cs = True  # butCS is driven manually below; don't let the kernel also toggle CE0/CE1
@@ -534,11 +508,16 @@ class Controls:
             return results
 
         # A pinmux that never took leaves MISO dead, so every reading is 0 -- a
-        # legitimate-looking value rather than an obviously broken read, worth flagging.
+        # legitimate-looking value rather than an obviously broken read, worth
+        # flagging. Bitbang mode claims these pins as plain GPIO and nothing
+        # restores their ALT0 (SPI) function afterwards except a reboot -- the
+        # pin mux is only reapplied when the SPI driver probes at boot.
         if not any(read_all(channels)):
             logger.warning(
-                "Initial SPI read was raw 0 on every channel; the MCP3008 may not be "
-                "reachable. Check `raspi-gpio get %s` reports func=ALT0.", SPI0_PINS,
+                "Initial SPI read was raw 0 on every channel; the MCP3008 may not "
+                "be reachable. If you just switched between SPI and bitbang mode, "
+                "reboot the device -- `raspi-gpio get %s` should report func=ALT0.",
+                SPI0_PINS,
             )
 
         try:

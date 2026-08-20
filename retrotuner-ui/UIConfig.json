@@ -8,7 +8,7 @@
       "element": "section",
       "label": "Button ADC Pin Configuration",
       "icon": "fa-cogs",
-      "description": "Pin configuration to read button presses from an MCP3008 ADC.",
+      "description": "Pin configuration to read button presses from an MCP3008 ADC. Switching between SPI and bitbang mode requires a full device reboot to take effect (not just a plugin restart).",
       "onSave": {
         "type": "controller",
         "endpoint": "user_interface/retrotuner-ui",
