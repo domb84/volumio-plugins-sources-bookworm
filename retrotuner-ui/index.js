@@ -65,6 +65,14 @@ retrotunerui.prototype.onRestart = function() {
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
 };
 
+// Called from the "Restart Now" button of the SPI-mode-changed modal (see
+// saveOptions) via Volumio's callMethod mechanism -- a plugin restart can't
+// apply an SPI/bitbang switch, only a full device reboot re-probes the pin mux.
+retrotunerui.prototype.rebootNow = function () {
+    this.commandRouter.reboot();
+    return libQ.resolve();
+};
+
 
 // Configuration Methods -----------------------------------------------------------------------------
 
@@ -199,8 +207,25 @@ retrotunerui.prototype.saveOptions = function (data) {
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
     if (spiModeChanged) {
-        self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
-            'SPI mode changed -- reboot the device for this to take effect (a plugin restart is not enough).');
+        // Same shape as Volumio's own "I2S DAC enabled" prompt: a modal with a
+        // one-click restart, since a plugin restart can't apply this change.
+        self.commandRouter.broadcastMessage('openModal', {
+            title: 'SPI Mode Changed',
+            message: 'SPI mode has been changed, restart the system for changes to take effect.',
+            size: 'lg',
+            buttons: [
+                {
+                    name: 'Restart Now',
+                    class: 'btn btn-info',
+                    emit: 'callMethod',
+                    payload: { endpoint: 'user_interface/retrotuner-ui', method: 'rebootNow', data: '' }
+                },
+                {
+                    name: 'Later',
+                    class: 'btn btn-default'
+                }
+            ]
+        });
     }
 
     if (self._checkButtonConflicts()) {
