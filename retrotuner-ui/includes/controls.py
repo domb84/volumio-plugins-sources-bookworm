@@ -13,12 +13,7 @@ from queue import Queue
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("Controls")
-from .utils import (
-    LEGACY_VALUE_CEILING,
-    looks_like_legacy_values,
-    parse_button_config,
-    spec_contains,
-)
+from .utils import parse_button_config, spec_contains
 
 # Capture ("learn") mode: while the flag file exists the settings page is asking
 # us to report raw button readings instead of acting on them.
@@ -40,10 +35,12 @@ SPI_CLOCK_HZ = 50000
 # Floor on the poll interval, whatever the configured rate says.
 MIN_POLL = 0.05
 
-# Readings are matched against the raw 10-bit ADC value. Buttons on the ladder
-# land roughly 30-60 counts apart, so the tolerances below are sized against
-# that gap: wide enough to absorb the noise on one reading, narrow enough to
-# leave a guard band between neighbouring buttons.
+# Readings are matched against the raw 10-bit ADC value. On a measured Teac
+# ladder, adjacent buttons sit 69-141 counts apart (see CAPTURE_BAND_HALF_WIDTH
+# in index.js, which captures against the same hardware), so the tolerances
+# below are sized against that gap: wide enough to absorb the noise on one
+# reading, narrow enough to leave a guard band between neighbouring buttons.
+# Keep this in sync with index.js's capture tolerances if either changes.
 #
 # ADC_SAMPLES readings are taken per channel per poll and reduced with a median,
 # which discards a read corrupted by an LCD strobe rather than averaging its
@@ -170,11 +167,15 @@ class Controls:
 
         `press_match` and `last_match` are each an (action, spec) pair or None:
         the press currently latched, and whatever the previous reading resolved
-        to. Both feed hysteresis -- see `_process_readings`.
+        to. Both feed hysteresis -- see `_process_readings`. `press_min`/
+        `press_max` track the raw reading's range over the life of the current
+        press, and `triggered` the control queued as a result of it (if any),
+        for the press-summary log line.
         """
         return {"last_key": None, "stable_since": None, "last_sent": 0.0, "warned": False,
                 "press_match": None, "last_match": None,
                 "press_start": None, "long_press_fired": False,
+                "press_min": None, "press_max": None, "triggered": None,
                 "capture_anchor": None, "capture_since": None}
 
     @staticmethod
@@ -183,6 +184,9 @@ class Controls:
         state["press_match"] = None
         state["press_start"] = None
         state["long_press_fired"] = False
+        state["press_min"] = None
+        state["press_max"] = None
+        state["triggered"] = None
 
     @staticmethod
     def _lookup_button(
@@ -296,6 +300,26 @@ class Controls:
         except Exception as e:
             logger.debug("Could not publish capture reading: %s", e)
 
+    @staticmethod
+    def _log_press_summary(channel: int, action: str, state: Dict, now: float) -> None:
+        """Log how long a press was held, the raw range it covered, and what it triggered.
+
+        Logged once the press ends -- whether by a clean release or by drifting
+        into an unrecognised reading -- since the range only settles once the
+        hold is over. `triggered` is whichever control (if any) was actually
+        queued during this press: nothing for a short press still on cooldown,
+        or a release after a long press has already fired. At INFO rather than
+        DEBUG: it fires once per physical press (never while idle), so it's
+        cheap to leave on, and the range is exactly what's needed to tune
+        button bands/hysteresis against real hardware behaviour.
+        """
+        duration = now - (state["press_start"] or now)
+        logger.info(
+            "Channel %d button press: %s detected for %.1fs (raw %d-%d), triggered: %s",
+            channel, action, duration, state["press_min"], state["press_max"],
+            state["triggered"] or "nothing",
+        )
+
     def _process_readings(self, batch_data, channels, button_states, parsed_btns, parsed_skips,
                           button_debounce_rate, button_cooldown_rate, long_press_threshold=None,
                           capture=False, hysteresis=BUTTON_HYSTERESIS):
@@ -354,6 +378,9 @@ class Controls:
                     logger.debug(f"Channel {channel} short press: {press[0]}")
                     self.controlQ.put({'control': press[0]})
                     state["last_sent"] = now
+                    state["triggered"] = press[0]
+                if press is not None:
+                    self._log_press_summary(channel, press[0], state, now)
                 self._clear_press(state)
                 continue
 
@@ -362,13 +389,19 @@ class Controls:
                     state["press_match"] = (action, spec)
                     state["press_start"] = now
                     state["long_press_fired"] = False
+                    state["press_min"] = data
+                    state["press_max"] = data
                     logger.debug(f"Channel {channel} press start: {action} (raw {data})")
-                elif (long_press_threshold is not None and not state["long_press_fired"]
-                      and now - (state["press_start"] or now) >= long_press_threshold):
-                    logger.debug(f"Channel {channel} long press: {action}_long")
-                    self.controlQ.put({'control': action + "_long"})
-                    state["long_press_fired"] = True
-                    state["last_sent"] = now
+                else:
+                    state["press_min"] = min(state["press_min"], data)
+                    state["press_max"] = max(state["press_max"], data)
+                    if (long_press_threshold is not None and not state["long_press_fired"]
+                          and now - (state["press_start"] or now) >= long_press_threshold):
+                        logger.debug(f"Channel {channel} long press: {action}_long")
+                        self.controlQ.put({'control': action + "_long"})
+                        state["long_press_fired"] = True
+                        state["last_sent"] = now
+                        state["triggered"] = action + "_long"
                 continue
 
             # Unrecognised value. Warn once per episode rather than once per poll:
@@ -378,6 +411,8 @@ class Controls:
                 state["warned"] = True
                 suffix = f" (releasing {press[0]})" if ready else ""
                 logger.warning(f"Uncaught press on Channel {channel}: {data}{suffix}")
+                if press is not None:
+                    self._log_press_summary(channel, press[0], state, now)
             self._clear_press(state)
 
     def rotary_encoder(self, encA, encB):
@@ -437,13 +472,6 @@ class Controls:
 
         parsed_btns = parse_button_config(btn_config)
         parsed_skips = parse_button_config(btn_skip_config)
-        if looks_like_legacy_values(parsed_btns):
-            logger.warning(
-                "Every configured button value is <= %d, which looks like the old "
-                "32-bucket scale rather than a raw ADC reading. Buttons will not "
-                "respond until they are re-captured in the settings page.",
-                LEGACY_VALUE_CEILING,
-            )
 
         logger.info("%s controls polling every %.3fs (median of %d samples)",
                     mode, poll, samples)

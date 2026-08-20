@@ -186,13 +186,20 @@ retrotunerui.prototype.saveOptions = function (data) {
         // A button mapping range, "channel, low-high". Ranges are the normal
         // shape now that matching runs on raw ADC counts, so the Advanced
         // section has to be able to save one. The plain "channel, value" form is
-        // already accepted by the comma-separated check above.
-        if (typeof value === 'string' && value.match(/^\s*\d+\s*,\s*\d+\s*-\s*\d+\s*$/)) {
-            return true;
+        // already accepted by the comma-separated check above. Reuses
+        // parseButtonMapping (below) rather than a second regex, so the accepted
+        // grammar can't drift out of sync between validation and parsing.
+        if (typeof value === 'string') {
+            const parsed = parseButtonMapping(value);
+            if (parsed && parsed.type === 'range') {
+                return true;
+            }
         }
 
-        // An empty value clears a mapping.
-        if (value === '') {
+        // An empty value clears a button mapping. Scoped to btn_* keys only --
+        // every other key is a required numeric setting (a GPIO pin, a rate) and
+        // an empty string there would crash the service on next start.
+        if (value === '' && key.indexOf('btn_') === 0) {
             return true;
         }
 
@@ -255,6 +262,8 @@ var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alon
 var ADC_MAX = 1023;
 // Sized against a measured Teac ladder: adjacent buttons sit 69-141 counts
 // apart, so a +/-25 band still leaves ~19 counts of guard on the tightest pair.
+// controls.py's BUTTON_HYSTERESIS is sized against this same measurement --
+// keep the two in sync if either changes.
 // The dominant error is not electrical noise but contact resistance -- an aged
 // carbon switch read 21 counts higher on a light press than a firm one -- so the
 // band has to cover how hard the button happens to be pressed, and the

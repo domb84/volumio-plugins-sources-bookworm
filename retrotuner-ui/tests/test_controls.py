@@ -380,3 +380,86 @@ class TestUncaughtReadingWarnings:
             self._run(c, states, [1010] * 2)            # back to rest
             self._run(c, states, [self.UNMAPPED] * 3)   # warns again
         assert log.warning.call_count == 2
+
+
+class TestPressSummaryLogging:
+    """A completed press logs its held duration and observed raw range once, at INFO."""
+
+    CHANNEL = 0
+    BAND = ("range", 328, 352)
+    REST = ("range", 998, 1022)
+
+    def _controls(self):
+        return _bare_controls()
+
+    def _run(self, c, states, readings, debounce=0.0):
+        for value in readings:
+            c._process_readings(
+                [value], [self.CHANNEL], states,
+                [("btn_pause", self.CHANNEL, self.BAND)],
+                [("rest", self.CHANNEL, self.REST)],
+                button_debounce_rate=debounce,
+                button_cooldown_rate=0.0,
+                long_press_threshold=1.0,
+                hysteresis=6,
+            )
+
+    def test_clean_release_logs_the_observed_range_and_what_it_triggered(self):
+        c = self._controls()
+        states = {self.CHANNEL: Controls._new_button_state()}
+        with patch("includes.controls.logger") as log:
+            self._run(c, states, [340, 340])    # press settles
+            self._run(c, states, [345, 345])    # drifts while held
+            self._run(c, states, [1010, 1010])  # release -> short press fires
+        assert log.info.call_count == 1
+        _, channel, action, duration, low, high, triggered = log.info.call_args[0]
+        assert (channel, action, low, high, triggered) == (self.CHANNEL, "btn_pause", 340, 345, "btn_pause")
+        assert duration >= 0
+
+    def test_nothing_is_logged_while_idle(self):
+        c = self._controls()
+        states = {self.CHANNEL: Controls._new_button_state()}
+        with patch("includes.controls.logger") as log:
+            self._run(c, states, [1010] * 5)
+        assert log.info.call_count == 0
+
+    def test_drifting_into_an_uncaught_reading_also_logs_the_range_and_nothing_triggered(self):
+        c = self._controls()
+        states = {self.CHANNEL: Controls._new_button_state()}
+        with patch("includes.controls.logger") as log:
+            self._run(c, states, [340, 340])  # press
+            self._run(c, states, [600, 600])  # drifts into no-man's land, nothing queued
+        assert log.warning.call_count == 1
+        assert log.info.call_count == 1
+        _, channel, action, duration, low, high, triggered = log.info.call_args[0]
+        assert (channel, action, low, high, triggered) == (self.CHANNEL, "btn_pause", 340, 340, "nothing")
+
+    def test_release_after_cooldown_suppresses_the_short_press_reports_nothing_triggered(self):
+        c = self._controls()
+        states = {self.CHANNEL: Controls._new_button_state()}
+        states[self.CHANNEL]["last_sent"] = time.monotonic()  # sent very recently
+        with patch("includes.controls.logger") as log:
+            self._run(c, states, [340, 340])                            # press
+            for value in [1010, 1010]:
+                c._process_readings(
+                    [value], [self.CHANNEL], states,
+                    [("btn_pause", self.CHANNEL, self.BAND)],
+                    [("rest", self.CHANNEL, self.REST)],
+                    button_debounce_rate=0.0, button_cooldown_rate=60.0,  # long cooldown
+                    long_press_threshold=1.0, hysteresis=6,
+                )
+        assert log.info.call_count == 1
+        _, channel, action, duration, low, high, triggered = log.info.call_args[0]
+        assert triggered == "nothing"
+
+    def test_long_press_release_reports_the_long_press_as_triggered(self):
+        c = self._controls()
+        states = {self.CHANNEL: Controls._new_button_state()}
+        with patch("includes.controls.logger") as log:
+            self._run(c, states, [340, 340])                          # press
+            states[self.CHANNEL]["press_start"] = time.monotonic() - 2.0  # exceed threshold
+            self._run(c, states, [340, 340])                          # long press fires
+            self._run(c, states, [1010, 1010])                        # release afterwards
+        assert log.info.call_count == 1  # only logged once, on release
+        _, channel, action, duration, low, high, triggered = log.info.call_args[0]
+        assert triggered == "btn_pause_long"

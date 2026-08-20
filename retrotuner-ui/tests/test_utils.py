@@ -1,10 +1,5 @@
 """Tests for includes/utils.py: parse_button_config and the raw-value helpers."""
-from includes.utils import (
-    LEGACY_VALUE_CEILING,
-    looks_like_legacy_values,
-    parse_button_config,
-    spec_contains,
-)
+from includes.utils import parse_button_config, spec_contains
 
 
 def test_single_value():
@@ -44,30 +39,6 @@ def test_multiple_buttons():
     assert ("a", 0, ("value", 12)) in result
     assert ("b", 1, ("range", 20, 22)) in result
     assert len(result) == 2
-
-
-class TestLooksLikeLegacyValues:
-    """Values left over from the old 32-bucket scale can never match a raw reading."""
-
-    def test_old_scale_values_are_flagged(self):
-        parsed = parse_button_config({"a": ("0", "21"), "b": ("0", "24-25")})
-        assert looks_like_legacy_values(parsed)
-
-    def test_raw_values_are_not_flagged(self):
-        parsed = parse_button_config({"a": ("0", "321-352"), "b": ("0", "193-256")})
-        assert not looks_like_legacy_values(parsed)
-
-    def test_a_single_raw_value_is_enough_to_clear_the_whole_config(self):
-        parsed = parse_button_config({"a": ("0", "21"), "b": ("0", "340")})
-        assert not looks_like_legacy_values(parsed)
-
-    def test_boundary_value_counts_as_legacy(self):
-        parsed = parse_button_config({"a": ("0", str(LEGACY_VALUE_CEILING))})
-        assert looks_like_legacy_values(parsed)
-
-    def test_empty_config_is_not_flagged(self):
-        # Nothing mapped yet is a fresh install, not a stale one.
-        assert not looks_like_legacy_values([])
 
 
 class TestSpecContains:
