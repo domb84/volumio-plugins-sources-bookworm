@@ -116,12 +116,15 @@ _TRACK_INFO_PAYLOAD = json.dumps([{
 
 class TestNavMode:
     """The rotary encoder scrolls the menu in nav mode, and skips tracks once
-    the screen has fallen back to showing what's playing (see _nav_mode)."""
+    the screen has fallen back to showing what's playing (see _nav_mode) --
+    but only when rotary_skip_track is enabled (these tests exercise that
+    enabled case; TestRotarySkipTrackDisabled covers the off-by-default one)."""
 
     def _manager(self):
         m = _bare_manager()
         m.volumioQ = queue.Queue()
         m._nav_mode = True
+        m._rotary_skip_track = True
         return m
 
     def test_menu_up_scrolls_in_nav_mode(self):
@@ -149,6 +152,33 @@ class TestNavMode:
         m._menu_down()
         assert m.volumioQ.get_nowait() == {'button': 'prev'}
         m.menu.processUp.assert_not_called()
+
+
+class TestRotarySkipTrackDisabled:
+    """Off by default: the encoder must always just scroll, regardless of nav
+    mode, unless rotary_skip_track is explicitly enabled (see MenuManager
+    docstring -- this is what stops encoder noise from skipping/stopping
+    playback when nobody's touched the knob)."""
+
+    def _manager(self):
+        m = _bare_manager()
+        m.volumioQ = queue.Queue()
+        m._rotary_skip_track = False
+        return m
+
+    def test_menu_up_scrolls_even_out_of_nav_mode_when_disabled(self):
+        m = self._manager()
+        m._nav_mode = False
+        m._menu_up()
+        m.menu.processDown.assert_called_once()
+        assert m.volumioQ.empty()
+
+    def test_menu_down_scrolls_even_out_of_nav_mode_when_disabled(self):
+        m = self._manager()
+        m._nav_mode = False
+        m._menu_down()
+        m.menu.processUp.assert_called_once()
+        assert m.volumioQ.empty()
 
     def test_show_track_info_leaves_nav_mode(self):
         m = self._manager()

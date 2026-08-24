@@ -64,6 +64,22 @@ def test_optional_button_included_when_present(key, value):
     assert key in result
 
 
+class TestParseOptionalBoolField:
+    """Used for settings (debug_mode, rotary_skip_track) an older config may not carry yet."""
+
+    def test_returns_default_when_key_absent(self):
+        assert index.parse_optional_bool_field({}, "rotary_skip_track", False) is False
+        assert index.parse_optional_bool_field({}, "rotary_skip_track", True) is True
+
+    def test_returns_stored_true(self):
+        cfg = {"rotary_skip_track": {"value": True}}
+        assert index.parse_optional_bool_field(cfg, "rotary_skip_track", False) is True
+
+    def test_returns_stored_false_even_if_default_is_true(self):
+        cfg = {"rotary_skip_track": {"value": False}}
+        assert index.parse_optional_bool_field(cfg, "rotary_skip_track", True) is False
+
+
 def test_load_button_skip_config():
     cfg = {
         "btn_no_press_channel1": {"value": "0,16"},

@@ -28,7 +28,7 @@ def apply_log_level(config_data: Dict[str, Any]) -> None:
     loggers ("Controls", "Menu Manager", ...) also pick it up -- otherwise the
     raw ADC readings logged while tuning button values could never appear.
     """
-    debug = bool(config_data.get("debug_mode", {}).get("value", False))
+    debug = parse_optional_bool_field(config_data, "debug_mode", False)
     logging.getLogger().setLevel(logging.DEBUG if debug else logging.INFO)
 
 stop_event = threading.Event()
@@ -58,6 +58,11 @@ def parse_optional_int_field(config: Dict[str, Any], key: str, default: int) -> 
         return parse_int_field(config, key)
     except (KeyError, TypeError, ValueError):
         return default
+
+
+def parse_optional_bool_field(config: Dict[str, Any], key: str, default: bool) -> bool:
+    """Read a bool setting that older config files may not carry yet."""
+    return bool(config.get(key, {}).get("value", default))
 
 
 def parse_button_mapping(value: str) -> Tuple[str, ...]:
@@ -111,6 +116,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
 
     rot_enc_A = parse_int_field(config_data, "rot_enc_A")
     rot_enc_B = parse_int_field(config_data, "rot_enc_B")
+    rotary_skip_track = parse_optional_bool_field(config_data, "rotary_skip_track", False)
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -152,6 +158,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     menu_worker = menu_manager.MenuManager(
         control_queue, volumio_queue, menu_manager_queue,
         lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
+        rotary_skip_track=rotary_skip_track,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 

@@ -252,7 +252,8 @@
         "label": "Save",
         "data": [
           "rot_enc_A",
-          "rot_enc_B"
+          "rot_enc_B",
+          "rotary_skip_track"
         ]
       },
       "content": [
@@ -269,6 +270,13 @@
           "element": "input",
           "label": "Rotary encoder pin B",
           "value": ""
+        },
+        {
+          "id": "rotary_skip_track",
+          "element": "switch",
+          "label": "Rotary encoder skips tracks when not navigating a menu (off = always scrolls the menu)",
+          "description": "Off by default: on some encoders, electrical noise can register as a turn even when nobody touches it. That's harmless when it only scrolls a menu, but can unexpectedly skip or stop playback if enabled.",
+          "value": false
         }
       ]
     },

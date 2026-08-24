@@ -59,6 +59,10 @@
         "type": "number",
         "value": "27"
     },
+    "rotary_skip_track": {
+        "type": "boolean",
+        "value": false
+    },
     "lcd_rs": {
         "type": "number",
         "value": "7"

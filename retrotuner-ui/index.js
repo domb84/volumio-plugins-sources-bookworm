@@ -145,6 +145,9 @@ retrotunerui.prototype.getUIConfig = function() {
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
             setValue(encoder, 'rot_enc_B', self.config.get('rot_enc_B'));
+            // New setting -- default matches menu_manager's own fallback for an
+            // older config that predates it (rotary skip stays off).
+            setValue(encoder, 'rotary_skip_track', self.config.get('rotary_skip_track', false));
 
             const lcd = section('lcd');
             setValue(lcd, 'lcd_rs', self.config.get('lcd_rs'));

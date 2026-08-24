@@ -26,12 +26,16 @@ from rpilcdmenu.items import FunctionItem
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""
 
-    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None):
+    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
         self.stop_event = stop_event
         self._lcd_pins = (lcdRS, lcdE, lcdD4, lcdD5, lcdD6, lcdD7)
+        # Off by default: on some encoders, electrical noise registers as a
+        # turn even untouched, which is harmless as a stray menu-scroll but can
+        # unexpectedly skip/stop playback once enabled. See _menu_up/_menu_down.
+        self._rotary_skip_track = rotary_skip_track
 
         # menu access times
         self.menuAccessTime = datetime.now()
@@ -196,16 +200,18 @@ class MenuManager:
 
     def _menu_up(self) -> None:
         """Scroll the menu in nav mode; skip to the next track once we've
-        fallen back to the now-playing screen."""
-        if self._nav_mode:
+        fallen back to the now-playing screen (only if rotary_skip_track is
+        enabled -- otherwise this always scrolls, regardless of nav mode)."""
+        if self._nav_mode or not self._rotary_skip_track:
             self.menu.processDown()
         else:
             self.volumioQ.put({'button': 'next'})
 
     def _menu_down(self) -> None:
         """Scroll the menu in nav mode; skip to the previous track once we've
-        fallen back to the now-playing screen."""
-        if self._nav_mode:
+        fallen back to the now-playing screen (only if rotary_skip_track is
+        enabled -- otherwise this always scrolls, regardless of nav mode)."""
+        if self._nav_mode or not self._rotary_skip_track:
             self.menu.processUp()
         else:
             self.volumioQ.put({'button': 'prev'})
