@@ -16,7 +16,7 @@ the plugin is unaffected either way.
 ```bash
 cd /data/plugins/user_interface/retrotuner-ui
 mkdir -p asound
-cp contrib/rt_in.rt_out.8.conf asound/
+cp contrib/rt_in.volumioOutput.8.conf asound/
 ```
 
 Then restart the plugin from the Plugins page.
@@ -38,7 +38,7 @@ Then long-press dimmer.
 ## Disable
 
 ```bash
-rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.rt_out.8.conf
+rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.volumioOutput.8.conf
 ```
 
 then **reboot**. Removing the file is not enough on its own: the plugin only
@@ -59,8 +59,10 @@ The fifo branch is wrapped in a `type plug` forcing 44100Hz S16_LE stereo. The
 meter decodes raw signed 16-bit samples, so without that it would read noise
 whenever the hardware ran at 24-bit or 96kHz.
 
-Modelled on `stylish_player`'s `sp_in.sp_out.7.conf`, which does the same job
-from the same kind of plugin.
+The filename is `<pcm defined>.<chain point to insert before>.<priority>.conf`.
+Check the names in `/etc/asound.conf` before changing the target -- other
+plugins in the wild target `postalsa` or `postDsp`, which do not exist in every
+Volumio version.
 
 Tapping the output chain rather than MPD's own fifo is what makes Spotify work:
 spop plays via librespot and never goes through MPD.
