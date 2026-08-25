@@ -23,6 +23,10 @@ _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
+# Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
+# mirrors the "+" prefix build_menu puts on folders.
+PLAY_ALL_LABEL = '>> Play All'
+
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""
 
@@ -123,7 +127,8 @@ class MenuManager:
                 elif 'menu' in queueItem:
                     if queueItem['menu']:
                         self._current_context = queueItem.get('context')
-                        self.build_menu(queueItem['menu'],queueItem.get('remember', True))
+                        self.build_menu(queueItem['menu'], queueItem.get('remember', True),
+                                        queueItem.get('play_all'))
                 elif 'info' in queueItem:
                     # An explicitly requested info update (info button) must show
                     # immediately; only automatic pushState updates are deferred
@@ -439,10 +444,14 @@ class MenuManager:
                 logger.error("Failed to process message: %s", e)
 
 
-    def build_menu(self, payload: str, remember: bool = True):
+    def build_menu(self, payload: str, remember: bool = True, play_all_uri: Optional[str] = None):
 
         # possible types that are folders
         folderTypes = ['folder', '-category', 'favourites', 'playlist', 'music_service']
+
+        def is_folder(item) -> bool:
+            item_type = item.get('type') or ''
+            return any(item_type.endswith(folder_type) for folder_type in folderTypes)
 
         logger.debug("Message menu: %s", payload)
         input_data = json.loads(payload)
@@ -483,12 +492,24 @@ class MenuManager:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
             menu = sorted(menu, key=lambda x: (
-                (any((x.get('type') or '').endswith(folder_type) for folder_type in folderTypes),  # Check if any folderType matches the end of the 'type'
-                (x.get('title') or '').strip().lower()  # Sort by title in ascending order
-            )))
+                is_folder(x),                            # folders after tracks
+                (x.get('title') or '').strip().lower()   # then by title
+            ))
 
         # parse menu
         counter = 0
+
+        # Offer to play the whole container, but only when the list actually
+        # holds playable items -- a list of sub-folders has nothing to play.
+        # Added before the loop so it takes position 0, which also keeps it
+        # first when this menu is restored from back-history (remember() saves
+        # each item's position and build_menu sorts by it).
+        if play_all_uri and any(not is_folder(i) for i in menu):
+            self.menu.append_item(
+                FunctionItem(PLAY_ALL_LABEL, self.resolve_item,
+                             [counter, PLAY_ALL_LABEL, play_all_uri, None])
+            )
+            counter += 1
 
         for i in menu:
             logger.debug("Menu input: %s", i)
@@ -496,14 +517,13 @@ class MenuManager:
                 buttonName = i.get('title', None)
                 buttonLink = i.get('uri', None)
                 buttonService = i.get('service', None)
-                buttonType = i.get('type', None)
 
                 # covers both "" and None (e.g. an unnamed Spotify playlist)
                 if not buttonName:
                     logger.debug("Skipping unnamed menu item at position %d", counter)
                     continue
 
-                if buttonType and any(buttonType.endswith(folder_type) for folder_type in folderTypes):
+                if is_folder(i):
                     buttonName = f"+{buttonName}"
 
                 if buttonService:

@@ -282,3 +282,113 @@ class TestButtonRouting:
         v.get_sources = Mock()
         v._process_button_item('next')
         v.get_sources.assert_not_called()
+
+
+class TestPlayAll:
+    """The synthetic "Play All" entry: offered by item type, not by URI scheme."""
+
+    SPOTIFY_PLAYLIST = 'spotify:user:spotify:playlist:37i9dQZF1DX4UtSsGT1Sbe'
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v._send = Mock()
+        v.menuManagerQ = queue.Queue()
+        v._refresh_timer = None
+        v._refresh_browse = False
+        v._last_browse_uri = None
+        v._last_browse_kind = None
+        v._browse_kinds = {}
+        return v
+
+    def _enter(self, v, uri, item_type, service='spop'):
+        """Browse a list containing `uri`, then navigate into it."""
+        v._remember_browse_kinds([{'uri': uri, 'type': item_type, 'service': service}])
+        v.get_sources(uri)
+        v._on_push_browse_library({'navigation': {'lists': [{'items': [
+            {'title': 'A Track', 'uri': 'x:track:1', 'service': service,
+             'type': 'song', 'position': 0},
+        ]}]}})
+        return v.menuManagerQ.get_nowait()
+
+    # --- which containers get the entry ---
+
+    def test_offered_for_every_container_type(self):
+        for item_type in ('playlist', 'album', 'artist', 'folder'):
+            v = self._volumio()
+            assert self._enter(v, 'x://thing', item_type)['play_all'], item_type
+
+    def test_not_offered_for_navigation_categories(self):
+        # These reach the Spotify plugin's unresolved else-branch; offering
+        # Play All there would hang the request rather than fail it.
+        for item_type in ('streaming-category', 'spotify-category',
+                          'radio-category', 'music_service', 'song', 'webradio'):
+            v = self._volumio()
+            assert self._enter(v, 'x://thing', item_type)['play_all'] is None, item_type
+
+    def test_not_offered_when_the_type_is_unknown(self):
+        v = self._volumio()
+        v.get_sources('x://never-listed')          # entered without a listing
+        v._on_push_browse_library({'navigation': {'lists': [{'items': [
+            {'title': 'T', 'uri': 'x:1', 'service': 's', 'type': 'song', 'position': 0}]}]}})
+        assert v.menuManagerQ.get_nowait()['play_all'] is None
+
+    def test_not_offered_for_synthetic_system_entries(self):
+        v = self._volumio()
+        assert self._enter(v, 'system://config', 'folder', None)['play_all'] is None
+
+    # --- source independence ---
+
+    def test_works_for_spotify(self):
+        v = self._volumio()
+        item = self._enter(v, self.SPOTIFY_PLAYLIST, 'playlist', 'spop')
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with('addPlay', {'uri': self.SPOTIFY_PLAYLIST, 'service': 'spop'})
+
+    def test_works_for_a_volumio_playlist(self):
+        v = self._volumio()
+        item = self._enter(v, 'playlists/Roadtrip', 'playlist', 'mpd')
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with('addPlay', {'uri': 'playlists/Roadtrip', 'service': 'mpd'})
+
+    def test_works_for_a_library_folder_with_slashes_in_the_uri(self):
+        v = self._volumio()
+        item = self._enter(v, 'music-library/USB/Albums/Rumours', 'folder', 'mpd')
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with(
+            'addPlay', {'uri': 'music-library/USB/Albums/Rumours', 'service': 'mpd'})
+
+    def test_works_for_a_third_party_plugin_uri(self):
+        v = self._volumio()
+        item = self._enter(v, 'volusonic/album/1234', 'folder', 'volusonic')
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with(
+            'addPlay', {'uri': 'volusonic/album/1234', 'service': 'volusonic'})
+
+    def test_service_is_omitted_when_the_listing_had_none(self):
+        v = self._volumio()
+        item = self._enter(v, 'somewhere/else', 'folder', None)
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with('addPlay', {'uri': 'somewhere/else'})
+
+    # --- behaviour ---
+
+    def test_clears_the_queue_before_adding(self):
+        v = self._volumio()
+        v.play_all('x://thing', 'mpd')
+        # c[0] is the positional-args tuple (call.args needs python 3.8).
+        assert [c[0][0] for c in v._send.call_args_list] == ['clearQueue', 'addPlay']
+
+    def test_entry_carries_the_container_not_live_browse_state(self):
+        # Baked into the entry so a menu restored from back-history still plays
+        # the right container, whatever the browse state has moved on to.
+        v = self._volumio()
+        item = self._enter(v, self.SPOTIFY_PLAYLIST, 'playlist', 'spop')
+        v._last_browse_uri = 'spotify:playlist:something-else'
+        v._last_browse_kind = None
+        v._process_button_item(item['play_all'])
+        v._send.assert_called_with('addPlay', {'uri': self.SPOTIFY_PLAYLIST, 'service': 'spop'})
+
+    def test_empty_container_is_refused(self):
+        v = self._volumio()
+        v.play_all('')
+        v._send.assert_not_called()
