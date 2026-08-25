@@ -78,8 +78,48 @@ retrotunerui.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
+// Audio tap for the hidden level meter. Only does anything when the optional
+// asound config has been dropped in by hand (see contrib/AUDIO_TAP.md) -- the
+// tap redefines the output chain, so it is never enabled behind the user's back.
+var AUDIO_TAP_CONF = 'rt_in.rt_out.8.conf';
+var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
+
+retrotunerui.prototype.setupAudioTap = function () {
+    const self = this;
+    const conf = __dirname + '/asound/' + AUDIO_TAP_CONF;
+
+    if (!fs.existsSync(conf)) {
+        return false;      // tap not enabled; nothing to do
+    }
+
+    // volumiofifo writes to the fifo but does not create it, so it has to exist
+    // before the ALSA config referencing it is applied (stylish_player does the
+    // same). Recreated each start so a stale non-fifo file can't wedge it.
+    try {
+        fs.removeSync(AUDIO_TAP_FIFO);
+        exec('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, function (e) {
+            if (e) { self.logger.error('RetroTuner UI - could not create audio tap fifo: ' + e); }
+        });
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not prepare audio tap fifo: ' + e);
+    }
+
+    // Volumio only folds plugin asound/ files into /etc/asound.conf when asked;
+    // nothing does it implicitly on plugin start.
+    try {
+        self.commandRouter.executeOnPlugin('audio_interface', 'alsa_controller', 'updateALSAConfigFile');
+        self.logger.info('RetroTuner UI - audio tap enabled (' + AUDIO_TAP_CONF + ')');
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not update the ALSA config: ' + e);
+    }
+
+    return true;
+};
+
 retrotunerui.prototype.onStart = function() {
     var self = this;
+
+    self.setupAudioTap();
 
     // SPI is on by default, so a fresh install would otherwise never add the
     // boot parameter -- no settings save ever happens. Logged rather than
