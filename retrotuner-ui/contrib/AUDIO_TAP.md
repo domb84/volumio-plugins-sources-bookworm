@@ -16,7 +16,7 @@ the plugin is unaffected either way.
 ```bash
 cd /data/plugins/user_interface/retrotuner-ui
 mkdir -p asound
-cp contrib/rt_in.volumioOutput.8.conf asound/
+cp contrib/rt_in.rt_out.8.conf asound/
 ```
 
 Then restart the plugin from the Plugins page.
@@ -38,7 +38,7 @@ Then long-press dimmer.
 ## Disable
 
 ```bash
-rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.volumioOutput.8.conf
+rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.rt_out.8.conf
 ```
 
 then **reboot**. Removing the file is not enough on its own: the plugin only

@@ -21,7 +21,8 @@
 			"bookworm"
 		],
 		"details": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
-		"changelog": "3.1.0: Button reads rewritten to match raw ADC values with tolerance bands, median sampling and hysteresis - fixes missed and misread presses. Fixed Spotify tracks not playing. Added Play All for playlists, albums and folders from any source. SPI is now enabled in the boot config automatically. 3.0.0: Renamed project. Improved code quality and performance. Added additional controls."
+		"changelog": "3.1.0: Button reads rewritten to match raw ADC values with tolerance bands, median sampling and hysteresis - fixes missed and misread presses. Fixed Spotify tracks not playing. Added Play All for playlists, albums and folders from any source. SPI is now enabled in the boot config automatically. 3.0.0: Renamed project. Improved code quality and performance. Added additional controls.",
+		"has_alsa_contribution": true
 	},
 	"engines": {
 		"node": ">=20",

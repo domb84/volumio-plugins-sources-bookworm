@@ -81,7 +81,7 @@ retrotunerui.prototype.onVolumioStart = function()
 // Audio tap for the hidden level meter. Only does anything when the optional
 // asound config has been dropped in by hand (see contrib/AUDIO_TAP.md) -- the
 // tap redefines the output chain, so it is never enabled behind the user's back.
-var AUDIO_TAP_CONF = 'rt_in.volumioOutput.8.conf';
+var AUDIO_TAP_CONF = 'rt_in.rt_out.8.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
 retrotunerui.prototype.setupAudioTap = function () {
