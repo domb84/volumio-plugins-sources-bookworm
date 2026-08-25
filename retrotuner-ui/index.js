@@ -97,7 +97,9 @@ retrotunerui.prototype.setupAudioTap = function () {
     // same). Recreated each start so a stale non-fifo file can't wedge it.
     try {
         fs.removeSync(AUDIO_TAP_FIFO);
-        exec('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, function (e) {
+        // As the volumio user, not root: this process runs as root (see
+        // serviceCmds) and the python service that reads the fifo does not.
+        exec('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, { uid: 1000, gid: 1000 }, function (e) {
             if (e) { self.logger.error('RetroTuner UI - could not create audio tap fifo: ' + e); }
         });
     } catch (e) {

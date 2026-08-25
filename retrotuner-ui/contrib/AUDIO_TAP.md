@@ -14,11 +14,12 @@ the plugin is unaffected either way.
 ## Enable
 
 ```bash
-sudo cp /data/plugins/user_interface/retrotuner-ui/contrib/rt_in.rt_out.8.conf \
-        /data/plugins/user_interface/retrotuner-ui/asound/
+cd /data/plugins/user_interface/retrotuner-ui
+mkdir -p asound
+cp contrib/rt_in.rt_out.8.conf asound/
 ```
 
-Then restart the plugin (Plugins page, or `sudo systemctl restart volumio`).
+Then restart the plugin from the Plugins page.
 
 On start the plugin notices the file and does the two things Volumio will not do
 for you: creates the fifo with `mkfifo`, then calls `updateALSAConfigFile` to
@@ -37,7 +38,7 @@ Then long-press dimmer.
 ## Disable
 
 ```bash
-sudo rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.rt_out.8.conf
+rm /data/plugins/user_interface/retrotuner-ui/asound/rt_in.rt_out.8.conf
 ```
 
 then **reboot**. Removing the file is not enough on its own: the plugin only
