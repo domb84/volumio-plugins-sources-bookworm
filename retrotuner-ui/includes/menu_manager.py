@@ -25,7 +25,10 @@ from rpilcdmenu.items import FunctionItem
 
 # Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
 # mirrors the "+" prefix build_menu puts on folders.
-PLAY_ALL_LABEL = '>> Play All'
+#
+# One chevron, not two: rpilcdmenu renders the selected row as ">" + text, so
+# the cursor supplies the second one and this reads ">> PLAY ALL" in place.
+PLAY_ALL_LABEL = '> Play All'
 
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""

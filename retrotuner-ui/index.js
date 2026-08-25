@@ -8,10 +8,14 @@ var exec = require('child_process').exec;
 // restart (capture/settings save) apart from a genuine stop/shutdown.
 var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
-// SPI mode does nothing without this line enabling the kernel driver -- and
-// nothing here can add it for the user without root, so the best available
-// fix is flagging it clearly (see saveOptions).
+// SPI mode does nothing without this line enabling the kernel driver. Volumio's
+// node process can write this file directly -- gpio_button_led does the same --
+// so the line is added rather than merely reported, and the user is asked to
+// reboot, which is the only thing that loads the driver.
 var USERCONFIG_PATH = '/boot/userconfig.txt';
+var SPI_USERCONFIG_LINE = 'dtparam=spi=on';
+var SPI_USERCONFIG_COMMENT =
+    '# Added by RetroTuner UI: the MCP3008 button ADC needs the SPI kernel driver';
 
 function isSpiEnabledInUserConfig() {
     try {
@@ -21,6 +25,39 @@ function isSpiEnabledInUserConfig() {
         return false;
     }
 }
+
+// Ensure dtparam=spi=on is present. Returns 'present', 'added', or an error
+// string. Only a reboot actually loads the driver, so 'added' means the caller
+// must ask for one -- until then every MCP3008 read comes back as 0.
+retrotunerui.prototype.ensureSpiInUserConfig = function () {
+    const self = this;
+    if (isSpiEnabledInUserConfig()) { return 'present'; }
+
+    let contents = '';
+    try {
+        contents = fs.readFileSync(USERCONFIG_PATH, 'utf8');
+    } catch (e) {
+        contents = '';   // absent is fine -- writing creates it
+    }
+
+    // A file with no trailing newline would otherwise glue our line onto
+    // whatever came last, silently breaking both settings.
+    if (contents.length > 0 && !contents.endsWith('
+')) { contents += '
+'; }
+    contents += SPI_USERCONFIG_COMMENT + '
+' + SPI_USERCONFIG_LINE + '
+';
+
+    try {
+        fs.writeFileSync(USERCONFIG_PATH, contents, 'utf8');
+        self.logger.info('RetroTuner UI - added "' + SPI_USERCONFIG_LINE + '" to ' + USERCONFIG_PATH);
+        return 'added';
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not write ' + USERCONFIG_PATH + ': ' + e);
+        return String(e);
+    }
+};
 
 
 module.exports = retrotunerui;
@@ -47,6 +84,14 @@ retrotunerui.prototype.onVolumioStart = function()
 
 retrotunerui.prototype.onStart = function() {
     var self = this;
+
+    // SPI is on by default, so a fresh install would otherwise never add the
+    // boot parameter -- no settings save ever happens. Logged rather than
+    // shown as a modal, since there may be no browser session at boot.
+    if (Boolean(self.config.get('spi')) && self.ensureSpiInUserConfig() === 'added') {
+        self.logger.warn('RetroTuner UI - SPI enabled in ' + USERCONFIG_PATH +
+            '; a reboot is required before the MCP3008 can be read');
+    }
 
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
@@ -223,26 +268,32 @@ retrotunerui.prototype.saveOptions = function (data) {
     self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    if (spiModeChanged && Boolean(data.spi) && !isSpiEnabledInUserConfig()) {
-        // Rebooting won't fix anything if the kernel driver was never enabled --
-        // that needs a manual edit, so don't offer a "Restart Now" that would
-        // just be a dead end.
+    // SPI is the default mode, so the boot config is checked whenever SPI is on
+    // -- not only when the switch changes -- otherwise a fresh install never
+    // gets the line added at all.
+    const bootConfig = Boolean(self.config.get('spi')) ? self.ensureSpiInUserConfig() : 'present';
+    const rebootPending = spiModeChanged || bootConfig === 'added';
+
+    if (bootConfig !== 'present' && bootConfig !== 'added') {
+        // Writing failed (read-only /boot, permissions). Rebooting would not
+        // help, so don't offer a "Restart Now" that leads nowhere.
         self.commandRouter.broadcastMessage('openModal', {
-            title: 'SPI Mode Enabled -- Boot Config Missing',
-            message: 'SPI mode is enabled here, but ' + USERCONFIG_PATH + ' does not have ' +
-                '"dtparam=spi=on". Add that line (via SSH), then reboot -- otherwise ' +
-                'button reads will come back as a constant 0.',
+            title: 'SPI Mode Enabled -- Boot Config Not Writable',
+            message: 'SPI mode is enabled, but "' + SPI_USERCONFIG_LINE + '" could not be added to ' +
+                USERCONFIG_PATH + ' (' + bootConfig + '). Add that line manually via SSH and reboot, ' +
+                'otherwise button reads will come back as a constant 0.',
             size: 'lg',
-            buttons: [
-                { name: 'OK', class: 'btn btn-default' }
-            ]
+            buttons: [{ name: 'OK', class: 'btn btn-default' }]
         });
-    } else if (spiModeChanged) {
+    } else if (rebootPending) {
         // Same shape as Volumio's own "I2S DAC enabled" prompt: a modal with a
-        // one-click restart, since a plugin restart can't apply this change.
+        // one-click restart, since a plugin restart can't apply either change.
         self.commandRouter.broadcastMessage('openModal', {
-            title: 'SPI Mode Changed',
-            message: 'SPI mode has been changed, restart the system for changes to take effect.',
+            title: bootConfig === 'added' ? 'SPI Enabled -- Reboot Required' : 'SPI Mode Changed',
+            message: bootConfig === 'added'
+                ? '"' + SPI_USERCONFIG_LINE + '" has been added to ' + USERCONFIG_PATH +
+                  '. Reboot to load the SPI driver -- until then button reads return 0.'
+                : 'SPI mode has been changed, restart the system for changes to take effect.',
             size: 'lg',
             buttons: [
                 {
@@ -261,13 +312,13 @@ retrotunerui.prototype.saveOptions = function (data) {
 
     const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
 
-    if (spiModeChanged) {
-        // A plugin restart can't apply an SPI/bitbang switch -- only a reboot
-        // re-probes the pin mux -- and restarting right now would try to open
-        // a kernel SPI device that doesn't exist yet (or is still bitbang'd),
-        // crashing the controls thread. The modal above is the only path
+    if (rebootPending) {
+        // A plugin restart can't apply an SPI/bitbang switch or a new boot
+        // parameter -- only a reboot re-probes the pin mux -- and restarting
+        // right now would try to open a kernel SPI device that doesn't exist
+        // yet, crashing the controls thread. The modal above is the only path
         // forward here; this restart happens implicitly once they reboot.
-        self.logger.info('RetroTuner UI - SPI mode changed; not restarting the plugin (needs a device reboot instead)');
+        self.logger.info('RetroTuner UI - reboot pending; not restarting the plugin');
     } else if (noConflicts) {
         self.logger.info('RetroTuner UI - restarting services');
         self.onRestart();
