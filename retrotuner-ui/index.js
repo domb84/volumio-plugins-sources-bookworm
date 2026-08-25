@@ -8,6 +8,57 @@ var exec = require('child_process').exec;
 // restart (capture/settings save) apart from a genuine stop/shutdown.
 var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
+// SPI mode does nothing without this line enabling the kernel driver. Volumio's
+// node process can write this file directly -- gpio_button_led does the same --
+// so the line is added rather than merely reported, and the user is asked to
+// reboot, which is the only thing that loads the driver.
+var USERCONFIG_PATH = '/boot/userconfig.txt';
+var SPI_USERCONFIG_LINE = 'dtparam=spi=on';
+var SPI_USERCONFIG_COMMENT =
+    '# Added by RetroTuner UI: the MCP3008 button ADC needs the SPI kernel driver';
+
+function isSpiEnabledInUserConfig() {
+    try {
+        var contents = fs.readFileSync(USERCONFIG_PATH, 'utf8');
+        return /^\s*dtparam\s*=\s*spi\s*=\s*on\s*$/m.test(contents);
+    } catch (e) {
+        return false;
+    }
+}
+
+// Ensure dtparam=spi=on is present. Returns 'present', 'added', or an error
+// string. Only a reboot actually loads the driver, so 'added' means the caller
+// must ask for one -- until then every MCP3008 read comes back as 0.
+retrotunerui.prototype.ensureSpiInUserConfig = function () {
+    const self = this;
+    if (isSpiEnabledInUserConfig()) { return 'present'; }
+
+    let contents = '';
+    try {
+        contents = fs.readFileSync(USERCONFIG_PATH, 'utf8');
+    } catch (e) {
+        contents = '';   // absent is fine -- writing creates it
+    }
+
+    // A file with no trailing newline would otherwise glue our line onto
+    // whatever came last, silently breaking both settings.
+    if (contents.length > 0 && !contents.endsWith('
+')) { contents += '
+'; }
+    contents += SPI_USERCONFIG_COMMENT + '
+' + SPI_USERCONFIG_LINE + '
+';
+
+    try {
+        fs.writeFileSync(USERCONFIG_PATH, contents, 'utf8');
+        self.logger.info('RetroTuner UI - added "' + SPI_USERCONFIG_LINE + '" to ' + USERCONFIG_PATH);
+        return 'added';
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not write ' + USERCONFIG_PATH + ': ' + e);
+        return String(e);
+    }
+};
+
 
 module.exports = retrotunerui;
 function retrotunerui(context) {
@@ -33,6 +84,14 @@ retrotunerui.prototype.onVolumioStart = function()
 
 retrotunerui.prototype.onStart = function() {
     var self = this;
+
+    // SPI is on by default, so a fresh install would otherwise never add the
+    // boot parameter -- no settings save ever happens. Logged rather than
+    // shown as a modal, since there may be no browser session at boot.
+    if (Boolean(self.config.get('spi')) && self.ensureSpiInUserConfig() === 'added') {
+        self.logger.warn('RetroTuner UI - SPI enabled in ' + USERCONFIG_PATH +
+            '; a reboot is required before the MCP3008 can be read');
+    }
 
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
@@ -63,6 +122,14 @@ retrotunerui.prototype.onRestart = function() {
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
+};
+
+// Called from the "Restart Now" button of the SPI-mode-changed modal (see
+// saveOptions) via Volumio's callMethod mechanism -- a plugin restart can't
+// apply an SPI/bitbang switch, only a full device reboot re-probes the pin mux.
+retrotunerui.prototype.rebootNow = function () {
+    this.commandRouter.reboot();
+    return libQ.resolve();
 };
 
 
@@ -101,11 +168,6 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(pins, 'buttons_cs', self.config.get('buttons_cs'));
             setValue(pins, 'buttons_channel1', self.config.get('buttons_channel1'));
             setValue(pins, 'buttons_channel2', self.config.get('buttons_channel2'));
-            setValue(pins, 'button_poll_rate', self.config.get('button_poll_rate'));
-            setValue(pins, 'button_debounce_rate', self.config.get('button_debounce_rate'));
-            setValue(pins, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            setValue(pins, 'button_samples', self.config.get('button_samples'));
-            setValue(pins, 'button_hysteresis', self.config.get('button_hysteresis'));
 
             // Capture section: action buttons have no stored values, but we
             // rewrite each "Configure" label to show its current mapping so the
@@ -122,11 +184,15 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
-            setValue(section('diagnostics'), 'log_level', self.config.get('log_level'));
+            // Also new -- default matches apply_log_level()'s own fallback in index.py.
+            setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
 
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
             setValue(encoder, 'rot_enc_B', self.config.get('rot_enc_B'));
+            // New setting -- default matches menu_manager's own fallback for an
+            // older config that predates it (rotary skip stays off).
+            setValue(encoder, 'rotary_skip_track', self.config.get('rotary_skip_track', false));
 
             const lcd = section('lcd');
             setValue(lcd, 'lcd_rs', self.config.get('lcd_rs'));
@@ -136,21 +202,16 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(lcd, 'lcd_d6', self.config.get('lcd_d6'));
             setValue(lcd, 'lcd_d7', self.config.get('lcd_d7'));
 
-            const advanced = section('button_resistance');
-            setValue(advanced, 'btn_enter', self.config.get('btn_enter'));
-            setValue(advanced, 'btn_radio', self.config.get('btn_radio'));
-            setValue(advanced, 'btn_spotify', self.config.get('btn_spotify'));
-            setValue(advanced, 'btn_info', self.config.get('btn_info'));
-            setValue(advanced, 'btn_favourite', self.config.get('btn_favourite'));
-            setValue(advanced, 'btn_main_menu', self.config.get('btn_main_menu'));
-            setValue(advanced, 'btn_back', self.config.get('btn_back'));
-            setValue(advanced, 'btn_no_press_channel1', self.config.get('btn_no_press_channel1'));
-            setValue(advanced, 'btn_no_press_channel2', self.config.get('btn_no_press_channel2'));
-            setValue(advanced, 'btn_pause', self.config.get('btn_pause'));
-            setValue(advanced, 'btn_remove_favourite', self.config.get('btn_remove_favourite'));
-            setValue(advanced, 'btn_sleep_timer', self.config.get('btn_sleep_timer'));
-            setValue(advanced, 'btn_cancel_sleep_timer', self.config.get('btn_cancel_sleep_timer'));
-            setValue(advanced, 'btn_dimmer', self.config.get('btn_dimmer'));
+            const advanced = section('button_advanced');
+            setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
+            setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
+            setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
+            // Added after these shipped, so an old config may not have them -- v-conf's
+            // get() then returns undefined, leaving the field blank, and an unedited
+            // Save submits an empty string that isValid() silently rejects. Must match
+            // controls.py's ADC_SAMPLES/BUTTON_HYSTERESIS -- keep the two in sync.
+            setValue(advanced, 'button_samples', self.config.get('button_samples', 5));
+            setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis', 6));
             defer.resolve(uiconf);
         })
         .fail(function (error) {
@@ -164,46 +225,21 @@ retrotunerui.prototype.getUIConfig = function() {
 retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
-    // Function to check if a value is numeric, boolean, or a button mapping
-    function isValid(value, key) {
-        // Check if the value is a boolean
+    // Captured before the save loop below overwrites it. A plugin restart
+    // can't apply this -- the pin mux is only reapplied when the SPI driver
+    // probes at boot -- so this is flagged separately from the usual restart.
+    const spiModeChanged = data.hasOwnProperty('spi') &&
+        Boolean(data.spi) !== Boolean(self.config.get('spi'));
+
+    // Every field saved through this form is either a switch (spi, debug_mode)
+    // or a plain numeric setting (a GPIO pin or a rate) -- button mappings are
+    // only ever written by the capture flow (self.config.set() below), which
+    // bypasses this validation entirely, so no button-mapping grammar needs
+    // handling here.
+    function isValid(value) {
         if (typeof value === 'boolean') {
             return true;
         }
-
-        // log_level is the one free-text setting; everything else is numeric,
-        // boolean or a button mapping.
-        if (key === 'log_level') {
-            return typeof value === 'string' &&
-                /^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$/i.test(value.trim());
-        }
-
-        // Check if the value is a comma-separated list of numbers
-        if (typeof value === 'string' && value.match(/^\s*(\d+\s*,\s*)*\d+\s*$/)) {
-            return true;
-        }
-
-        // A button mapping range, "channel, low-high". Ranges are the normal
-        // shape now that matching runs on raw ADC counts, so the Advanced
-        // section has to be able to save one. The plain "channel, value" form is
-        // already accepted by the comma-separated check above. Reuses
-        // parseButtonMapping (below) rather than a second regex, so the accepted
-        // grammar can't drift out of sync between validation and parsing.
-        if (typeof value === 'string') {
-            const parsed = parseButtonMapping(value);
-            if (parsed && parsed.type === 'range') {
-                return true;
-            }
-        }
-
-        // An empty value clears a button mapping. Scoped to btn_* keys only --
-        // every other key is a required numeric setting (a GPIO pin, a rate) and
-        // an empty string there would crash the service on next start.
-        if (value === '' && key.indexOf('btn_') === 0) {
-            return true;
-        }
-
-        // Check if the value is a single numeric value
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
 
@@ -220,12 +256,11 @@ retrotunerui.prototype.saveOptions = function (data) {
         if (jsonObject.hasOwnProperty(key)) {
             const value = jsonObject[key];
             // console.log(`${key}: ${value}`);
-            if (isValid(value, key)) {
-                // console.log(`${value} is a valid number, comma seperated numbers or boolean. Saving ${key}.`);
+            if (isValid(value)) {
                 self.config.set(key, value);
             } else {
-                self.logger.error(`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`);
-                this.commandRouter.pushToastMessage('fail', ("RetroTuner UI"), (`${value} is not a valid number, comma seperated numbers or boolean. Not saving ${key}.`));
+                self.logger.error(`${value} is not a valid number or boolean. Not saving ${key}.`);
+                this.commandRouter.pushToastMessage('fail', ("RetroTuner UI"), (`${value} is not a valid number or boolean. Not saving ${key}.`));
             }
         }
     }
@@ -233,7 +268,58 @@ retrotunerui.prototype.saveOptions = function (data) {
     self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    if (self._checkButtonConflicts()) {
+    // SPI is the default mode, so the boot config is checked whenever SPI is on
+    // -- not only when the switch changes -- otherwise a fresh install never
+    // gets the line added at all.
+    const bootConfig = Boolean(self.config.get('spi')) ? self.ensureSpiInUserConfig() : 'present';
+    const rebootPending = spiModeChanged || bootConfig === 'added';
+
+    if (bootConfig !== 'present' && bootConfig !== 'added') {
+        // Writing failed (read-only /boot, permissions). Rebooting would not
+        // help, so don't offer a "Restart Now" that leads nowhere.
+        self.commandRouter.broadcastMessage('openModal', {
+            title: 'SPI Mode Enabled -- Boot Config Not Writable',
+            message: 'SPI mode is enabled, but "' + SPI_USERCONFIG_LINE + '" could not be added to ' +
+                USERCONFIG_PATH + ' (' + bootConfig + '). Add that line manually via SSH and reboot, ' +
+                'otherwise button reads will come back as a constant 0.',
+            size: 'lg',
+            buttons: [{ name: 'OK', class: 'btn btn-default' }]
+        });
+    } else if (rebootPending) {
+        // Same shape as Volumio's own "I2S DAC enabled" prompt: a modal with a
+        // one-click restart, since a plugin restart can't apply either change.
+        self.commandRouter.broadcastMessage('openModal', {
+            title: bootConfig === 'added' ? 'SPI Enabled -- Reboot Required' : 'SPI Mode Changed',
+            message: bootConfig === 'added'
+                ? '"' + SPI_USERCONFIG_LINE + '" has been added to ' + USERCONFIG_PATH +
+                  '. Reboot to load the SPI driver -- until then button reads return 0.'
+                : 'SPI mode has been changed, restart the system for changes to take effect.',
+            size: 'lg',
+            buttons: [
+                {
+                    name: 'Restart Now',
+                    class: 'btn btn-info',
+                    emit: 'callMethod',
+                    payload: { endpoint: 'user_interface/retrotuner-ui', method: 'rebootNow', data: '' }
+                },
+                {
+                    name: 'Later',
+                    class: 'btn btn-default'
+                }
+            ]
+        });
+    }
+
+    const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
+
+    if (rebootPending) {
+        // A plugin restart can't apply an SPI/bitbang switch or a new boot
+        // parameter -- only a reboot re-probes the pin mux -- and restarting
+        // right now would try to open a kernel SPI device that doesn't exist
+        // yet, crashing the controls thread. The modal above is the only path
+        // forward here; this restart happens implicitly once they reboot.
+        self.logger.info('RetroTuner UI - reboot pending; not restarting the plugin');
+    } else if (noConflicts) {
         self.logger.info('RetroTuner UI - restarting services');
         self.onRestart();
     }
@@ -255,20 +341,15 @@ var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much in
 var CAPTURE_POLL_MS = 200;
 var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
 
-// Capture works on raw 10-bit ADC readings. Two presses of the same button
-// never land on exactly the same count, so confirming a capture is a tolerance
-// test and what gets stored is a band around the midpoint of the two readings
-// rather than a single point.
+// Capture works on raw ADC readings, which never land on exactly the same
+// count twice, so confirming a capture is a tolerance test and what gets
+// stored is a band around the midpoint of the two readings.
 var ADC_MAX = 1023;
-// Sized against a measured Teac ladder: adjacent buttons sit 69-141 counts
-// apart, so a +/-25 band still leaves ~19 counts of guard on the tightest pair.
-// controls.py's BUTTON_HYSTERESIS is sized against this same measurement --
-// keep the two in sync if either changes.
-// The dominant error is not electrical noise but contact resistance -- an aged
-// carbon switch read 21 counts higher on a light press than a firm one -- so the
-// band has to cover how hard the button happens to be pressed, and the
-// confirmation tolerance has to accept two presses that differ by that much or
-// the button can never be captured at all.
+// Sized against a measured Teac ladder (adjacent buttons 69-141 counts apart --
+// keep in sync with controls.py's BUTTON_HYSTERESIS). The dominant error is
+// contact resistance, not noise -- an aged switch read 21 counts higher on a
+// light press than a firm one, so both the band and the confirm tolerance
+// have to cover that much press-to-press variation.
 var CAPTURE_CONFIRM_TOLERANCE = 15;  // counts two presses may differ by and still confirm
 var CAPTURE_BAND_HALF_WIDTH = 25;    // half-width of the band written to the config
 
@@ -291,12 +372,24 @@ var CAPTURE_LABELS = {
     btn_info: 'Info',
     btn_favourite: 'Favourite',
     btn_pause: 'Pause/Play',
-    btn_remove_favourite: 'Remove Favourite',
     btn_sleep_timer: 'Sleep Timer',
-    btn_cancel_sleep_timer: 'Cancel Sleep Timer',
     btn_dimmer: 'Dimmer',
     btn_main_menu: 'Main Menu',
     btn_back: 'Back'
+};
+
+// Pushes the current getUIConfig() output to any open settings page, so a
+// value changed here (capture, clear, base resistance) shows up immediately
+// instead of needing a manual page reload.
+retrotunerui.prototype._refreshUiConfig = function () {
+    const self = this;
+    self.commandRouter.getUIConfigOnPlugin('user_interface', 'retrotuner-ui', {})
+        .then(function (config) {
+            self.commandRouter.broadcastMessage('pushUiConfig', config);
+        })
+        .fail(function (e) {
+            self.logger.error('RetroTuner UI - could not refresh settings page: ' + e);
+        });
 };
 
 // Conflict detection helpers ---------------------------------------------------
@@ -334,17 +427,14 @@ retrotunerui.prototype.captureBtnSpotify = function () { return this.startCaptur
 retrotunerui.prototype.captureBtnInfo = function () { return this.startCapture('btn_info'); };
 retrotunerui.prototype.captureBtnFavourite = function () { return this.startCapture('btn_favourite'); };
 retrotunerui.prototype.captureBtnPause = function () { return this.startCapture('btn_pause'); };
-retrotunerui.prototype.captureBtnRemoveFavourite = function () { return this.startCapture('btn_remove_favourite'); };
 retrotunerui.prototype.captureBtnSleepTimer = function () { return this.startCapture('btn_sleep_timer'); };
-retrotunerui.prototype.captureBtnCancelSleepTimer = function () { return this.startCapture('btn_cancel_sleep_timer'); };
 retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture('btn_dimmer'); };
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 
-// Clear the button currently selected for capture. Clearing is folded into the
-// same staged session as capturing, so a single "Save & Restart Controls"
-// applies both. The user chooses which button by clicking its "Configure"
-// button first, then clicks "Clear Selected Button" instead of pressing it.
+// Clear the button currently selected for capture. Folded into the same
+// staged session as capturing, so one "Save & Restart Controls" applies both --
+// choose the button via "Configure", then click "Clear Selected Button".
 retrotunerui.prototype.clearSelectedButton = function () {
     const self = this;
     const session = self._captureSession;
@@ -368,13 +458,13 @@ retrotunerui.prototype.clearSelectedButton = function () {
 
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         '"' + label + '" cleared. Configure another button, or click "Save & Restart Controls".');
+    self._refreshUiConfig();
     return libQ.resolve();
 };
 
-// Begin a capture session if one isn't already running. The session keeps
-// the controls paused (via the flag file) until the user saves or goes
-// idle, so button presses never reach the device while configuring.
-// Returns false if the session could not be started.
+// Begin a capture session if one isn't already running. Keeps the controls
+// paused (via the flag file) until the user saves or goes idle. Returns
+// false if the session could not be started.
 retrotunerui.prototype.ensureCaptureSession = function () {
     const self = this;
     if (self._captureSession) { return true; }
@@ -473,6 +563,7 @@ retrotunerui.prototype.pollCapture = function () {
         }
         msg += ' Configure another button, or click "Save & Restart Controls".';
         self.commandRouter.pushToastMessage(displaced.length > 0 ? 'warning' : 'success', 'Button Capture', msg);
+        self._refreshUiConfig();
 
         // Stay in the session (controls remain paused); wait for the next button.
         session.target = null;
@@ -542,6 +633,7 @@ retrotunerui.prototype.finishBaseResistanceCapture = function (session, startSeq
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Captured base resistance: channel ' + ch1 + ' = ' + val1 + ', channel ' + ch2 + ' = ' + val2 +
         '. Configure another button, or click "Save & Restart Controls".');
+    self._refreshUiConfig();
 };
 
 retrotunerui.prototype.endCaptureSession = function () {
@@ -577,11 +669,13 @@ retrotunerui.prototype.saveCapture = function () {
     if (!self._checkButtonConflicts()) {
         self.commandRouter.pushToastMessage('info', 'Button Capture',
             'Values saved (' + summary + ') but restart blocked — fix the conflict above first.');
+        self._refreshUiConfig();
         return libQ.resolve();
     }
 
     self.commandRouter.pushToastMessage('success', 'Button Capture',
         'Saved (' + summary + '). Restarting controls...');
+    self._refreshUiConfig();
     self.onRestart();
     return libQ.resolve();
 };

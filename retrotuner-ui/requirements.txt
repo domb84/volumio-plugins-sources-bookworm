@@ -8,9 +8,13 @@ python-socketio[client]>=4,<5
 
 # GPIO / SPI hardware access. The MCP3008 button ADC is read directly via
 # bitbanged GPIO or spidev (see includes/controls.py) - no Adafruit stack needed.
-RPi.GPIO
+#
+# RPi.GPIO and spidev are NOT listed here: both need compiling, which would
+# drag python3-dev (and, on this image, a forced core-library upgrade) into
+# the venv. install.sh installs them prebuilt via apt (python3-rpi.gpio,
+# python3-spidev) and the venv is created with --system-site-packages so it
+# can see them.
 pigpio
-spidev
 
 # REST API server
 fastapi

@@ -24,17 +24,12 @@ logging.getLogger("engineio").setLevel(logging.WARNING)
 def apply_log_level(config_data: Dict[str, Any]) -> None:
     """Set the root level from config, so DEBUG reaches every module's logger.
 
-    Previously only this module's logger was forced to DEBUG, which left the
-    per-module loggers ("Controls", "Menu Manager", ...) inheriting the root
-    INFO level -- so the raw ADC readings logged while tuning button values
-    could never actually appear.
+    Set on the root rather than just this module's logger, so the per-module
+    loggers ("Controls", "Menu Manager", ...) also pick it up -- otherwise the
+    raw ADC readings logged while tuning button values could never appear.
     """
-    name = str(config_data.get("log_level", {}).get("value", "INFO") or "INFO").upper()
-    level = getattr(logging, name, None)
-    if not isinstance(level, int):
-        logger.warning("Unknown log_level %r; falling back to INFO", name)
-        level = logging.INFO
-    logging.getLogger().setLevel(level)
+    debug = parse_optional_bool_field(config_data, "debug_mode", False)
+    logging.getLogger().setLevel(logging.DEBUG if debug else logging.INFO)
 
 stop_event = threading.Event()
 
@@ -65,6 +60,11 @@ def parse_optional_int_field(config: Dict[str, Any], key: str, default: int) -> 
         return default
 
 
+def parse_optional_bool_field(config: Dict[str, Any], key: str, default: bool) -> bool:
+    """Read a bool setting that older config files may not carry yet."""
+    return bool(config.get(key, {}).get("value", default))
+
+
 def parse_button_mapping(value: str) -> Tuple[str, ...]:
     return tuple(map(str, value.split(",")))
 
@@ -82,12 +82,8 @@ def load_button_config(config_data: Dict[str, Any]) -> Dict[str, Tuple[str, ...]
     # Optional so existing configs without the key keep working.
     if "btn_pause" in config_data and config_data["btn_pause"].get("value"):
         config["btn_pause"] = parse_button_mapping(config_data["btn_pause"]["value"])
-    if "btn_remove_favourite" in config_data:
-        config["btn_remove_favourite"] = parse_button_mapping(config_data["btn_remove_favourite"]["value"])
     if "btn_sleep_timer" in config_data and config_data["btn_sleep_timer"].get("value"):
         config["btn_sleep_timer"] = parse_button_mapping(config_data["btn_sleep_timer"]["value"])
-    if "btn_cancel_sleep_timer" in config_data and config_data["btn_cancel_sleep_timer"].get("value"):
-        config["btn_cancel_sleep_timer"] = parse_button_mapping(config_data["btn_cancel_sleep_timer"]["value"])
     if "btn_dimmer" in config_data and config_data["btn_dimmer"].get("value"):
         config["btn_dimmer"] = parse_button_mapping(config_data["btn_dimmer"]["value"])
     return config
@@ -120,6 +116,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
 
     rot_enc_A = parse_int_field(config_data, "rot_enc_A")
     rot_enc_B = parse_int_field(config_data, "rot_enc_B")
+    rotary_skip_track = parse_optional_bool_field(config_data, "rotary_skip_track", False)
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -161,6 +158,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     menu_worker = menu_manager.MenuManager(
         control_queue, volumio_queue, menu_manager_queue,
         lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
+        rotary_skip_track=rotary_skip_track,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 

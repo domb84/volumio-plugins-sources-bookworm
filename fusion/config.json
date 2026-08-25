@@ -346,5 +346,9 @@
     "chunksize": {
         "type": "number",
         "value": 4800
+    },
+     "chunksizeauto": {
+        "type": "boolean",
+        "value": true
     }
 }

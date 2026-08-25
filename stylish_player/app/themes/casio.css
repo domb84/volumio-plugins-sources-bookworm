@@ -833,9 +833,59 @@ p {
   pointer-events: none;
 }
 
-/* Allow children to use cqi units relative to the dialog width */
+/* Allow children to use cqi units relative to the dialog width. */
 .dialog {
   container-type: inline-size;
+}
+
+/* Make the scrollable body a positioning context so absolutely-positioned
+   children — notably the BrowseDialog's `.alphabet-scroller` — anchor to
+   the dialog body area only (not the whole viewport, and not the dialog
+   including its header / footer bars). */
+.dialog-body {
+  position: relative;
+}
+
+/* ── BrowseDialog body layout ──
+   The BrowseDialog puts a `.browse-body` shell inside `.dialog-body`.
+   The shell itself does NOT scroll — it hosts an inner
+   `.browse-body__scroll` viewport that scrolls the results, plus a
+   `.alphabet-scroller` sibling that stays absolutely pinned to the
+   right edge (independent of the scroll viewport, so it never scrolls
+   with the results and never overlaps the header/footer bars).
+
+   `.dialog-body` is a flex item of `.dialog` with `flex: 1 1 auto`, so
+   percentage heights on descendants don't resolve unless we make the
+   body itself a flex column and let its children flex to fill. */
+.browse-dialog .dialog-body {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.browse-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.browse-body__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+}
+
+/* When the alphabet scroller is present, reserve horizontal space on the
+   right so grid tiles and list rows don't slide underneath the letters.
+   The scroller sits at `right: 28px` (past the scrollbar) with a 34px
+   width — give ~68px of clearance so nothing overlaps. */
+.browse-body:has(.alphabet-scroller) .browse-body__scroll {
+  padding-right: 68px;
 }
 
 @keyframes dialogBackdropFadeIn {
@@ -5337,8 +5387,9 @@ input[type=range]::-webkit-slider-thumb {
   border-color: var(--casio-edge);
   background: var(--casio-body);
 }
-.dialog-toolbar .browse-search__input:focus {
+.dialog-toolbar .browse-search__input:focus, .dialog-toolbar .browse-search__input:focus-visible {
   border-color: var(--casio-lcd-bg);
+  outline: none;
 }
 .dialog-toolbar .browse-search__icon {
   color: var(--casio-on-dark-dim);
@@ -5456,9 +5507,19 @@ input[type=range]::-webkit-slider-thumb {
 .lcd-days {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: 0.5cqw;
   margin-bottom: 0.6cqw;
   font-family: "DS Digital", "Share Tech Mono", "Courier New", monospace;
+  /* Bold + container-scaled so the seven labels grow to fill the LCD
+       panel width while still fitting the widest locale. `cqw` refers to
+       `.digital-clock-wrapper`'s width (the sized container declared at
+       the top of this file), matching the rest of the digital clock's
+       responsive sizing. */
+  font-weight: 700;
+  font-size: clamp(0.7rem, 3.2cqw, 3.5rem);
+  letter-spacing: 0.02em;
+  line-height: 1;
   color: rgba(12, 30, 24, 0.3);
   /* inactive day — dim on light bg */
 }
@@ -5692,11 +5753,12 @@ input[type=range]::-webkit-slider-thumb {
     transform: scale(min(92cqi / 68cqi, 85cqb / 42cqi)) !important;
   }
   /* Center the digit row inside the frame so it never appears left-aligned
-     even if the frame ever grows wider than its content. */
+     even if the frame ever grows wider than its content. `.lcd-days` is
+     intentionally excluded — it needs the base rule's `space-between` so
+     the seven day letters spread across the full LCD panel width. */
   .lcd-time,
   .lcd-digits,
-  .lcd-info,
-  .lcd-days {
+  .lcd-info {
     justify-content: center !important;
   }
 }

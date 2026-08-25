@@ -1278,6 +1278,10 @@ ControllerStylishPlayer.prototype._buildConfigData = function () {
     idleTimeout: self.config.get("idleTimeout", 5),
     showWeatherInClock: self.config.get("showWeatherInClock", true),
     analogClockShowDate: self.config.get("analogClockShowDate", true),
+    clockBackgroundColor: self.config.get("clockBackgroundColor", ""),
+    clockFrameColor: self.config.get("clockFrameColor", ""),
+    clockFaceColor: self.config.get("clockFaceColor", ""),
+    clockFontColor: self.config.get("clockFontColor", ""),
     weatherBackgroundColor: self.config.get("weatherBackgroundColor", ""),
     unsplashApiKey: self.config.get("unsplashApiKey", ""),
     fanartTvApiKey: self.config.get("fanartTvApiKey", ""),
@@ -1504,6 +1508,10 @@ ControllerStylishPlayer.prototype.getUIConfig = function () {
       field('section_clock', 'wallpaperShowSeconds').value  = self.config.get("wallpaperShowSeconds", false);
       field('section_clock', 'showWeatherInClock').value    = self.config.get("showWeatherInClock", true);
       field('section_clock', 'analogClockShowDate').value   = self.config.get("analogClockShowDate", true);
+      field('section_clock', 'clockBackgroundColor').value  = self.config.get("clockBackgroundColor", "");
+      field('section_clock', 'clockFrameColor').value       = self.config.get("clockFrameColor", "");
+      field('section_clock', 'clockFaceColor').value        = self.config.get("clockFaceColor", "");
+      field('section_clock', 'clockFontColor').value        = self.config.get("clockFontColor", "");
 
       // ── section_weather ────────────────────────────────────────────────
       field('section_weather', 'latitude').value             = self.config.get("latitude", "");
@@ -1985,6 +1993,10 @@ ControllerStylishPlayer.prototype.configSaveClock = function (data) {
   self.config.set("wallpaperShowSeconds", data["wallpaperShowSeconds"] === true || data["wallpaperShowSeconds"] === "true");
   self.config.set("showWeatherInClock", data["showWeatherInClock"] !== false);
   self.config.set("analogClockShowDate", data["analogClockShowDate"] !== false);
+  self.config.set("clockBackgroundColor", (data["clockBackgroundColor"] || "").toString().trim());
+  self.config.set("clockFrameColor", (data["clockFrameColor"] || "").toString().trim());
+  self.config.set("clockFaceColor", (data["clockFaceColor"] || "").toString().trim());
+  self.config.set("clockFontColor", (data["clockFontColor"] || "").toString().trim());
   self.commandRouter.pushToastMessage("success", "Stylish Player", "Clock settings saved.");
 
   self.broadcastConfig();

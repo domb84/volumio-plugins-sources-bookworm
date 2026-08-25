@@ -23,15 +23,26 @@ _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
+# Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
+# mirrors the "+" prefix build_menu puts on folders.
+#
+# One chevron, not two: rpilcdmenu renders the selected row as ">" + text, so
+# the cursor supplies the second one and this reads ">> PLAY ALL" in place.
+PLAY_ALL_LABEL = '> Play All'
+
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""
 
-    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None):
+    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
         self.stop_event = stop_event
         self._lcd_pins = (lcdRS, lcdE, lcdD4, lcdD5, lcdD6, lcdD7)
+        # Off by default: on some encoders, electrical noise registers as a
+        # turn even untouched, which is harmless as a stray menu-scroll but can
+        # unexpectedly skip/stop playback once enabled. See _menu_up/_menu_down.
+        self._rotary_skip_track = rotary_skip_track
 
         # menu access times
         self.menuAccessTime = datetime.now()
@@ -46,6 +57,13 @@ class MenuManager:
         self._info_release_timer: Optional[threading.Timer] = None
         self._idle_timer: Optional[threading.Timer] = None
         self._current_context: Optional[str] = None
+
+        # True while the rotary encoder scrolls the menu; False once the screen
+        # has fallen back to showing what's playing, where it skips tracks
+        # instead. Only ever set alongside an actual LCD write (menu.render() or
+        # menu.message() in show_track_info) so it always matches what's really
+        # on screen -- see build_menu, _render_menu and show_track_info.
+        self._nav_mode = True
 
     def run(self):
         """Claim the display and service the queues until stopped. Thread entry point.
@@ -66,8 +84,8 @@ class MenuManager:
 
         # define control actions
         self.control_actions = {
-            'menu_up': self.menu.processDown,
-            'menu_down': self.menu.processUp,
+            'menu_up': self._menu_up,
+            'menu_down': self._menu_down,
             'btn_main_menu': lambda: self.volumioQ.put({'button': 'menu'}),
             'btn_enter': self.menu.processEnter,
             'btn_radio': lambda: self.volumioQ.put({'button': 'radio'}),
@@ -76,9 +94,9 @@ class MenuManager:
             'btn_info': lambda: self.volumioQ.put({'show': 'info'}),
             'btn_spotify': lambda: self.volumioQ.put({'button': 'spotify'}),
             'btn_favourite': self.add_favorite,
-            'btn_remove_favourite': self.remove_favorite,
+            'btn_favourite_long': self.remove_favorite,
             'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
-            'btn_cancel_sleep_timer': self._cancel_sleep_timer,
+            'btn_sleep_timer_long': self._cancel_sleep_timer,
             'btn_dimmer': lambda: self._display.toggle(),
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
         }
@@ -112,7 +130,8 @@ class MenuManager:
                 elif 'menu' in queueItem:
                     if queueItem['menu']:
                         self._current_context = queueItem.get('context')
-                        self.build_menu(queueItem['menu'],queueItem.get('remember', True))
+                        self.build_menu(queueItem['menu'], queueItem.get('remember', True),
+                                        queueItem.get('play_all'))
                 elif 'info' in queueItem:
                     # An explicitly requested info update (info button) must show
                     # immediately; only automatic pushState updates are deferred
@@ -186,6 +205,34 @@ class MenuManager:
         if len(self.last_10_items) > 1:
             return self.last_10_items.popleft()
         return None
+
+    def _menu_up(self) -> None:
+        """Scroll the menu in nav mode; skip to the next track once we've
+        fallen back to the now-playing screen (only if rotary_skip_track is
+        enabled -- otherwise this always scrolls, regardless of nav mode)."""
+        if self._nav_mode or not self._rotary_skip_track:
+            self.menu.processDown()
+        else:
+            self.volumioQ.put({'button': 'next'})
+
+    def _menu_down(self) -> None:
+        """Scroll the menu in nav mode; skip to the previous track once we've
+        fallen back to the now-playing screen (only if rotary_skip_track is
+        enabled -- otherwise this always scrolls, regardless of nav mode)."""
+        if self._nav_mode or not self._rotary_skip_track:
+            self.menu.processUp()
+        else:
+            self.volumioQ.put({'button': 'prev'})
+
+    def _render_menu(self) -> None:
+        """Re-render the current menu and restore the rotary encoder to nav mode.
+
+        Used wherever the menu can reappear without going through build_menu --
+        e.g. a toast's deferred revert -- so nav mode always matches what a
+        render actually just put on screen.
+        """
+        self._nav_mode = True
+        self.menu.render()
 
     def _selected_favourite(self) -> Optional[str]:
         """Return JSON {title, uri, service} for the highlighted menu item.
@@ -304,11 +351,11 @@ class MenuManager:
         self.volumioQ.put({'show': 'info'})
 
     def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
-        # clear will clear the display and not render anything after (ie for shut down)
-        # static will leave the message on screen, assuming nothing renders over it immedaitely after
-        # autoscroll will scroll the message then leave on screen
-        # force will bypass the duplicate/rate suppression so the message always shows
-        # the default will show the message, then render the menu after 2 seconds
+        # clear: clears the display and renders nothing after (for shutdown)
+        # static: leaves the message on screen with nothing rendering over it
+        # autoscroll: scrolls the message then leaves it on screen
+        # force: bypasses duplicate/rate suppression so the message always shows
+        # default: shows the message, then renders the menu after 2 seconds
 
         self.messageTime = datetime.now()
         lastMessageTime = (self.messageTime - self.lastMessageTime).total_seconds()
@@ -335,7 +382,7 @@ class MenuManager:
                     self.menu.message(message.upper())
                     self.lastMessageTime = datetime.now()
                     self.lastMessage = message
-                    self._schedule_deferred(self.menu.render)
+                    self._schedule_deferred(self._render_menu)
                     return
 
             return self
@@ -367,6 +414,7 @@ class MenuManager:
                 second_line = '/'.join(x for x in [album, quality] if x)
 
                 message = f"{first_line}\n{second_line}"
+                self._nav_mode = False  # rotary now skips tracks instead of scrolling
                 self.display_message(message, autoscroll=True)
 
         except Exception as e:
@@ -374,18 +422,11 @@ class MenuManager:
 
 
     def show_message(self, payload: str, force: bool = False, persist: bool = False) -> None:
-        ## Example
-        # message = []
-        # message.append({
-        #     'type': None,
-        #     'title': None,
-        #     'message': 'No media is playing'
-        # })
-        # message = json.dumps(message)
-        # self.menuManagerQ.put({'message':message})
-        # force=True  bypasses duplicate/rate suppression
-        # persist=True skips the deferred menu re-render (message stays until next interaction)
+        """Show one or more {type, title, message} toasts from a JSON list payload.
 
+        force=True bypasses duplicate/rate suppression; persist=True skips the
+        deferred menu re-render, so the message stays until the next interaction.
+        """
         logger.debug("Message input: %s", payload)
         input_data = json.loads(payload)
 
@@ -401,15 +442,19 @@ class MenuManager:
 
                 self.display_message(message, autoscroll=True, force=force)
                 if not persist:
-                    self._schedule_deferred(self.menu.render)
+                    self._schedule_deferred(self._render_menu)
             except Exception as e:
                 logger.error("Failed to process message: %s", e)
 
 
-    def build_menu(self, payload: str, remember: bool = True):
+    def build_menu(self, payload: str, remember: bool = True, play_all_uri: Optional[str] = None):
 
         # possible types that are folders
         folderTypes = ['folder', '-category', 'favourites', 'playlist', 'music_service']
+
+        def is_folder(item) -> bool:
+            item_type = item.get('type') or ''
+            return any(item_type.endswith(folder_type) for folder_type in folderTypes)
 
         logger.debug("Message menu: %s", payload)
         input_data = json.loads(payload)
@@ -421,13 +466,11 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu: if this was a background refresh (remember=False, e.g.
-        # after deleting the last favourite) navigate up to the parent menu so
-        # the user isn't left on a stale menu showing the just-deleted item.
-        # For any other empty-menu case, tell the user and stay put.
-        # Checked before remember() so the back-button history isn't polluted,
-        # and forced past the duplicate suppression because the selected item's
-        # name has usually just been displayed by resolve_item.
+        # An empty menu after a background refresh (remember=False, e.g. deleting
+        # the last favourite) navigates up to the parent instead of showing a
+        # stale list. Otherwise just tell the user and stay put. Checked before
+        # remember() so the back-button history isn't polluted, and forced past
+        # duplicate suppression since resolve_item usually just showed this title.
         if not menu:
             if not remember:
                 previous = self.go_back()
@@ -445,21 +488,35 @@ class MenuManager:
         if self.menu is not None:
             self.menu.items = []
 
-        # sort menu by type if it wasnt sorted already
-        # Items arrive with every key present but possibly None (volumio.py
-        # always sets them), so `or ''`/`or 0` is needed rather than .get()
-        # defaults — an unnamed Spotify playlist would otherwise crash the sort
-        # and abort the whole menu build.
+        # Items arrive with every key present but possibly None, so `or ''`/`or 0`
+        # is needed rather than .get() defaults -- an unnamed Spotify playlist
+        # would otherwise crash the sort and abort the whole menu build.
         if menu and menu[0].get('position') is not None:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
             menu = sorted(menu, key=lambda x: (
-                (any((x.get('type') or '').endswith(folder_type) for folder_type in folderTypes),  # Check if any folderType matches the end of the 'type'
-                (x.get('title') or '').strip().lower()  # Sort by title in ascending order
-            )))
+                is_folder(x),                            # folders after tracks
+                (x.get('title') or '').strip().lower()   # then by title
+            ))
 
         # parse menu
         counter = 0
+
+        # Offer to play the whole container, but only when the list actually
+        # holds playable items -- a list of sub-folders has nothing to play.
+        # Added before the loop so it takes position 0, which also keeps it
+        # first when this menu is restored from back-history (remember() saves
+        # each item's position and build_menu sorts by it).
+        if play_all_uri and any(not is_folder(i) for i in menu):
+            logger.debug("Adding %s -> %s", PLAY_ALL_LABEL, play_all_uri)
+            self.menu.append_item(
+                FunctionItem(PLAY_ALL_LABEL, self.resolve_item,
+                             [counter, PLAY_ALL_LABEL, play_all_uri, None])
+            )
+            counter += 1
+        elif play_all_uri:
+            logger.debug("Play All offered (%s) but no playable items in this list",
+                         play_all_uri)
 
         for i in menu:
             logger.debug("Menu input: %s", i)
@@ -467,14 +524,13 @@ class MenuManager:
                 buttonName = i.get('title', None)
                 buttonLink = i.get('uri', None)
                 buttonService = i.get('service', None)
-                buttonType = i.get('type', None)
 
                 # covers both "" and None (e.g. an unnamed Spotify playlist)
                 if not buttonName:
                     logger.debug("Skipping unnamed menu item at position %d", counter)
                     continue
 
-                if buttonType and any(buttonType.endswith(folder_type) for folder_type in folderTypes):
+                if is_folder(i):
                     buttonName = f"+{buttonName}"
 
                 if buttonService:
@@ -493,6 +549,9 @@ class MenuManager:
         
         self.menu.current_option = index
 
+        # A real menu is now on screen, so the rotary encoder scrolls it again.
+        self._nav_mode = True
+
         # return rendered menu
         # if you do not return the menu it will render the original one again
         return self.menu.render()
@@ -503,7 +562,10 @@ class MenuManager:
         logger.debug("item link: %s", button_link)
         logger.debug("item service: %s", button_service)
         self.display_message(button_name.lstrip('+'), autoscroll=True)
-        self.volumioQ.put({'button': button_link})
+        # The owning service travels with the item. Volumio routes addPlay by
+        # service name, and guessing it from the URI later gets it wrong (the
+        # Spotify plugin registers as "spop", not "spotify").
+        self.volumioQ.put({'button': button_link, 'service': button_service})
 
 
     def dimmer(self):
