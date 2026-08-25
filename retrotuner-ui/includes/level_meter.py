@@ -10,14 +10,13 @@ glyphs -- bar heights 1/8 to 8/8 -- so this shows the level envelope over time
 instead: each column is one recent time slice, scrolling right to left, which
 reads much like a waveform.
 
-Audio comes from a raw PCM tap (see contrib/AUDIO_TAP.md). Nothing here touches
-the audio path itself -- it only reads a fifo, and does nothing at all when
-that fifo is absent.
+Audio comes from a raw PCM tap (see contrib/AUDIO_TAP.md).
 """
 import array
 import logging
 import math
 import os
+import select
 import threading
 import time
 from collections import deque
@@ -42,17 +41,19 @@ BAR_GLYPHS = tuple(range(8))
 CELL_ROWS = 8
 MAX_LEVEL = CELL_ROWS * LCD_ROWS
 
-# Raw PCM tap. Signed 16-bit little-endian stereo, which is what the ALSA
-# volumiofifo hook produces.
+# Raw PCM tap. Signed 16-bit little-endian stereo, which the ALSA config forces
+# regardless of what rate the hardware is running at.
 DEFAULT_FIFO_PATH = "/tmp/retrotuner-audio.fifo"
 SAMPLE_BYTES = 2
 CHANNELS = 2
 
-# Bytes pulled per frame. At 44.1kHz stereo S16, 1024 frames is ~23ms of audio,
-# which is about the right window for a 20fps display and keeps the read small
-# enough that a stalled fifo cannot block for long.
-READ_FRAMES = 1024
-READ_BYTES = READ_FRAMES * SAMPLE_BYTES * CHANNELS
+# The tap must be drained continuously, at the rate audio is produced: 44.1kHz
+# stereo S16 is 176kB/s and a linux pipe holds only 64kB, so letting it fill
+# blocks the ALSA writer and stops playback within about a third of a second.
+# Draining therefore runs in its own thread for as long as the tap exists,
+# whether or not the meter is on screen; rendering only samples what it finds.
+DRAIN_BYTES = 16384
+DRAIN_POLL = 0.2               # select() timeout, so stopping stays responsive
 
 FRAME_INTERVAL = 0.05          # 20fps ceiling; the display cannot keep up with more
 SILENCE_TIMEOUT = 2.0          # after this long with no audio, show the idle message
@@ -81,10 +82,11 @@ def bar_bitmaps():
 def _peak_raw(pcm_bytes):
     """Largest absolute sample in an S16_LE buffer.
 
-    audioop does this in C. It matters more than it looks: scanning a frame's
-    worth of samples in interpreted Python costs ~80x more, on a Pi, in the same
-    process and under the same GIL as the SPI button polling. audioop was
-    removed in python 3.13, hence the fallback.
+    audioop does this in C. It matters more than it looks: scanning the stream
+    in interpreted python costs ~80x more, on a Pi, in the same process and
+    under the same GIL as the SPI button polling -- and this runs continuously,
+    not only while the meter is visible. audioop was removed in python 3.13,
+    hence the fallback.
     """
     if _audioop is not None:
         return _audioop.max(pcm_bytes, SAMPLE_BYTES)
@@ -159,44 +161,137 @@ def render_columns(levels):
 
 
 class LevelMeter:
-    """Reads the PCM tap and drives the display until stopped.
+    """Drains the PCM tap continuously and draws it when asked.
 
-    Constructing this touches nothing; ``start()`` opens the fifo and spawns the
-    render thread, ``stop()`` puts the menu back.
+    Draining and rendering are deliberately separate. The fifo has to be emptied
+    at the full stream rate or ALSA blocks and playback stops, so the drain
+    thread runs for as long as the tap exists. Showing the meter only starts a
+    second thread, which samples the peak the drain thread has accumulated.
     """
 
     def __init__(self, menu, fifo_path=DEFAULT_FIFO_PATH, on_stop=None):
         self._menu = menu
         self._fifo_path = fifo_path
         self._on_stop = on_stop
-        self._thread = None
-        self._stop = threading.Event()
+
+        self._drain_thread = None
+        self._drain_stop = threading.Event()
+
+        self._render_thread = None
+        self._render_stop = threading.Event()
+
+        self._peak_lock = threading.Lock()
+        self._peak = 0              # highest sample seen since the last frame
+        self._last_sound = 0.0
+
         self._glyphs_loaded = False
         self._history = deque([0] * LCD_COLUMNS, maxlen=LCD_COLUMNS)
 
+    # --- draining ---------------------------------------------------------
+
+    @property
+    def draining(self):
+        return self._drain_thread is not None and self._drain_thread.is_alive()
+
+    def start_drain(self):
+        """Begin emptying the fifo. Returns False when no tap is installed.
+
+        Must be running whenever the ALSA tap is in the chain, or playback
+        stalls. Deliberately not tied to the meter being visible.
+        """
+        if self.draining:
+            return True
+        if not self._fifo_available():
+            return False
+
+        self._drain_stop.clear()
+        self._drain_thread = threading.Thread(target=self._drain_loop,
+                                              name="AudioTapDrainThread", daemon=True)
+        self._drain_thread.start()
+        logger.info("Audio tap drain started (%s)", self._fifo_path)
+        return True
+
+    def stop_drain(self):
+        self._drain_stop.set()
+        thread, self._drain_thread = self._drain_thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def _drain_loop(self):
+        fd = None
+        try:
+            # Non-blocking open: a fifo with no writer would otherwise block
+            # here until something starts playing.
+            fd = os.open(self._fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+            while not self._drain_stop.is_set():
+                ready, _, _ = select.select([fd], [], [], DRAIN_POLL)
+                if not ready:
+                    continue
+                # Read until empty rather than one chunk per wake-up: falling
+                # behind the stream rate is exactly what stalls playback.
+                while True:
+                    try:
+                        chunk = os.read(fd, DRAIN_BYTES)
+                    except (BlockingIOError, InterruptedError):
+                        break
+                    if not chunk:
+                        break
+                    self._record_peak(chunk)
+                    if len(chunk) < DRAIN_BYTES:
+                        break
+        except Exception as e:
+            logger.error("Audio tap drain stopped: %s", e)
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+            logger.info("Audio tap drain stopped")
+
+    def _record_peak(self, chunk):
+        usable = len(chunk) - (len(chunk) % SAMPLE_BYTES)
+        if usable <= 0:
+            return
+        peak = _peak_raw(chunk[:usable])
+        with self._peak_lock:
+            if peak > self._peak:
+                self._peak = peak
+        if peak / FULL_SCALE > SILENCE_FLOOR:
+            self._last_sound = time.monotonic()
+
+    def _take_peak(self):
+        """Peak since the previous frame, reset ready for the next one."""
+        with self._peak_lock:
+            peak, self._peak = self._peak, 0
+        return min(peak / FULL_SCALE, 1.0)
+
+    # --- rendering --------------------------------------------------------
+
     @property
     def running(self):
-        return self._thread is not None and self._thread.is_alive()
+        return self._render_thread is not None and self._render_thread.is_alive()
 
     def start(self):
         if self.running:
             return False
-        if not self._fifo_available():
+        if not self.start_drain():
             logger.warning("No audio tap at %s; not starting the level meter",
                            self._fifo_path)
             self._menu.message("NO AUDIO TAP".ljust(LCD_COLUMNS))
             return False
 
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="LevelMeterThread",
-                                        daemon=True)
-        self._thread.start()
+        self._render_stop.clear()
+        self._render_thread = threading.Thread(target=self._render_loop,
+                                               name="LevelMeterThread", daemon=True)
+        self._render_thread.start()
         logger.info("Level meter started")
         return True
 
     def stop(self):
-        self._stop.set()
-        thread, self._thread = self._thread, None
+        """Stop drawing. Draining continues -- stopping it would stall audio."""
+        self._render_stop.set()
+        thread, self._render_thread = self._render_thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)
         logger.info("Level meter stopped")
@@ -220,49 +315,25 @@ class LevelMeter:
             self._menu.create_char(location, bitmap)
         self._glyphs_loaded = True
 
-    def _run(self):
-        handle = None
-        last_sound = time.monotonic()
+    def _render_loop(self):
         try:
             self._load_glyphs()
-            # Non-blocking: a fifo with no writer would otherwise block open()
-            # until something starts playing, leaving the button press dead.
-            fd = os.open(self._fifo_path, os.O_RDONLY | os.O_NONBLOCK)
-            handle = os.fdopen(fd, 'rb', 0)
-
-            while not self._stop.is_set():
+            while not self._render_stop.is_set():
                 started = time.monotonic()
 
-                try:
-                    chunk = handle.read(READ_BYTES)
-                except (BlockingIOError, InterruptedError):
-                    chunk = None
-                except OSError as e:
-                    logger.warning("Audio tap read failed: %s", e)
-                    break
+                self._history.append(scale_level(self._take_peak()))
 
-                level = peak_level(chunk) if chunk else 0.0
-                if level > SILENCE_FLOOR:
-                    last_sound = started
-
-                self._history.append(scale_level(level))
-
-                if started - last_sound > SILENCE_TIMEOUT:
+                if started - self._last_sound > SILENCE_TIMEOUT:
                     self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
                 else:
                     self._menu.render_frame(render_columns(self._history))
 
                 remaining = FRAME_INTERVAL - (time.monotonic() - started)
                 if remaining > 0:
-                    self._stop.wait(remaining)
+                    self._render_stop.wait(remaining)
         except Exception as e:
             logger.error("Level meter stopped on error: %s", e)
         finally:
-            if handle is not None:
-                try:
-                    handle.close()
-                except Exception:
-                    pass
             if self._on_stop is not None:
                 try:
                     self._on_stop()

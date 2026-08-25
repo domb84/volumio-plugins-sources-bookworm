@@ -84,6 +84,14 @@ class MenuManager:
         self._display.on()
         self.menu.message(('Initialising...').upper(), autoscroll=True)
 
+        # If the optional audio tap is installed, something must empty its fifo
+        # continuously or ALSA blocks on write and playback stops within about a
+        # third of a second. That is true whether or not the meter is on screen,
+        # so draining starts here rather than with the display.
+        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+        if self._level_meter.start_drain():
+            logger.info("Audio tap present; draining it")
+
         # render main menu
         self.volumioQ.put({'button': 'menu'})
 
@@ -241,7 +249,7 @@ class MenuManager:
         While it runs it owns the display, so the normal menu/track-info
         rendering is paused -- see _meter_active.
         """
-        if self._level_meter is None:
+        if self._level_meter is None:      # not reached once run() has started
             self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
 
         if self._level_meter.running:

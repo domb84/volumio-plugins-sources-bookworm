@@ -3,6 +3,7 @@
 All pure logic -- nothing here touches a display or a fifo.
 """
 import array
+from unittest.mock import Mock
 
 from includes.level_meter import (
     CELL_ROWS,
@@ -189,3 +190,73 @@ class TestPeakBackends:
 
     def test_backends_agree_on_empty_input(self):
         assert self._both(b'') == (0.0, 0.0)
+
+
+class TestDrainKeepsUpWithTheStream:
+    """The fifo must be emptied at the rate audio is produced.
+
+    A linux pipe holds 64kB and 44.1kHz stereo S16 is 176kB/s, so a reader that
+    falls behind lets the buffer fill, ALSA blocks on write, and playback stops
+    after about a third of a second. This is not a performance nicety -- it is
+    the difference between working audio and silence.
+    """
+
+    STREAM_BYTES_PER_SEC = 44100 * 2 * 2
+    PIPE_BUFFER = 65536
+
+    def test_a_full_pipe_stalls_audio_in_well_under_a_second(self):
+        # Documents the observed symptom, so the number is not mysterious later.
+        assert self.PIPE_BUFFER / self.STREAM_BYTES_PER_SEC < 0.5
+
+    def test_a_single_wakeup_can_move_a_useful_share_of_the_buffer(self):
+        from includes.level_meter import DRAIN_BYTES
+        # Throughput is not DRAIN_BYTES/DRAIN_POLL: select() returns as soon as
+        # data is there (the timeout only bounds idle wake-ups), and the loop
+        # then reads until empty. What matters is that each read is large
+        # enough that emptying the pipe takes a handful of syscalls, not
+        # hundreds.
+        assert DRAIN_BYTES >= self.PIPE_BUFFER // 8
+
+    def test_the_old_per_frame_read_would_not_have_kept_up(self):
+        from includes.level_meter import FRAME_INTERVAL
+        # The original design read one 4kB chunk per rendered frame.
+        assert (4096 / FRAME_INTERVAL) < self.STREAM_BYTES_PER_SEC
+
+
+class TestDrainOutlivesTheDisplay:
+    """Hiding the meter must not stop draining, or audio stops with it."""
+
+    def _meter(self):
+        from includes.level_meter import LevelMeter
+        m = LevelMeter(Mock(), fifo_path='/nonexistent')
+        return m
+
+    def test_stop_does_not_touch_the_drain(self):
+        m = self._meter()
+        m._drain_thread = Mock(is_alive=Mock(return_value=True))
+        m.stop()                       # hide the display
+        assert m.draining, "stop() must leave the fifo being drained"
+
+    def test_stop_drain_is_a_separate_call(self):
+        m = self._meter()
+        assert hasattr(m, 'stop_drain')
+        assert m.stop is not m.stop_drain
+
+    def test_start_refuses_when_there_is_no_tap(self):
+        m = self._meter()
+        assert m.start() is False
+        assert not m.draining
+
+    def test_take_peak_resets_for_the_next_frame(self):
+        m = self._meter()
+        m._peak = 16384
+        first = m._take_peak()
+        assert first > 0.49
+        assert m._take_peak() == 0.0    # consumed
+
+    def test_peak_is_the_loudest_since_the_last_frame(self):
+        m = self._meter()
+        m._record_peak(_pcm(1000, -2000))
+        m._record_peak(_pcm(30000, 5))
+        m._record_peak(_pcm(10, 10))
+        assert m._take_peak() > 0.9     # the transient survives, not the average
