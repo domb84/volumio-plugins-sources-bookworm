@@ -473,3 +473,58 @@ class TestPlayAllSurvivesBackNavigation:
         assert len(v._browse_kinds) == BROWSE_KIND_CACHE_MAX
         assert 'u0' not in v._browse_kinds          # oldest evicted
         assert 'u%d' % (BROWSE_KIND_CACHE_MAX + 499) in v._browse_kinds
+
+
+class TestPlayRoutesByService:
+    """Volumio routes addPlay by service name, so the item's own service is used.
+
+    Regression: play() hardcoded service 'spotify', but the Spotify plugin
+    registers as 'spop' -- the name every browse item and every pushState in the
+    logs actually carries.
+    """
+
+    TRACK = 'spotify:track:2mHchPRtQWet3iIS3jANr1'
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v._send = Mock()
+        return v
+
+    def test_uses_the_service_the_item_carried(self):
+        v = self._volumio()
+        v.play(self.TRACK, 'spop')
+        v._send.assert_called_once_with(
+            'addPlay', {'status': 'play', 'service': 'spop', 'uri': self.TRACK})
+
+    def test_never_sends_the_unregistered_spotify_service(self):
+        v = self._volumio()
+        v.play(self.TRACK, 'spop')
+        assert v._send.call_args[0][1]['service'] != 'spotify'
+
+    def test_service_travels_from_the_queue_item(self):
+        v = self._volumio()
+        v._process_queue_item({'button': self.TRACK, 'service': 'spop'})
+        v._send.assert_called_once_with(
+            'addPlay', {'status': 'play', 'service': 'spop', 'uri': self.TRACK})
+
+    def test_a_third_party_service_is_passed_through_unchanged(self):
+        v = self._volumio()
+        v.play('http://host/stream.mp3', 'volusonic')
+        assert v._send.call_args[0][1]['service'] == 'volusonic'
+
+    # --- fallback for items that arrive without a service ---
+
+    def test_webradio_is_inferred_when_missing(self):
+        v = self._volumio()
+        v.play('http://host/stream.mp3')
+        assert v._send.call_args[0][1]['service'] == 'webradio'
+
+    def test_spotify_falls_back_to_spop_not_spotify(self):
+        v = self._volumio()
+        v.play(self.TRACK)
+        assert v._send.call_args[0][1]['service'] == 'spop'
+
+    def test_unroutable_uri_is_refused_rather_than_guessed(self):
+        v = self._volumio()
+        v.play('somescheme://whatever')
+        v._send.assert_not_called()

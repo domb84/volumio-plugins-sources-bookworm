@@ -138,7 +138,7 @@ class Volumio:
         if 'show' in item:
             self._process_show_item(item)
         elif 'button' in item:
-            self._process_button_item(item['button'])
+            self._process_button_item(item['button'], item.get('service'))
         elif 'memory' in item:
             self._process_memory_item(item)
         elif 'remove_favourite' in item:
@@ -154,7 +154,7 @@ class Volumio:
             self.get_state()
             logger.debug("%s", item)
 
-    def _process_button_item(self, button: str):
+    def _process_button_item(self, button: str, service: Optional[str] = None):
         if button == 'menu':
             self._last_browse_uri = None
             self.get_browse_sources()
@@ -162,7 +162,7 @@ class Volumio:
             return
 
         if self.STREAM_URI_REGEX.match(button):
-            self.play(button)
+            self.play(button, service)
             logger.debug("%s", button)
             return
 
@@ -709,14 +709,30 @@ class Volumio:
             self._send('search', {'uri':link, 'title':title, 'service':service})
 
     
-    def play(self, uri: str) -> None:
-        # self._send('clearQueue')
-        if self.WEBRADIO_URI_REGEX.match(uri):
-            self._send('addPlay', {'status':'play', 'service':'webradio', 'uri':uri})
-        elif self.SPOTIFY_TRACK_REGEX.match(uri):
-            self._send('addPlay', {'status':'play', 'service':'spotify', 'uri':uri})
-        else:
-            logger.debug("URi does not match webradio or spotify: %s", uri)
+    def play(self, uri: str, service: Optional[str] = None) -> None:
+        """Queue and play a single track.
+
+        `service` comes from the menu item itself. Volumio routes addPlay by
+        service name, so guessing it from the URI is guessing: the Spotify
+        plugin registers as "spop", and asking for "spotify" names a service
+        that does not exist.
+        """
+        if not service:
+            # Only reached for an item that arrived without one. Inferring from
+            # the URI is the old behaviour, kept as a fallback -- note "spop",
+            # which is what the Spotify plugin actually registers as.
+            if self.WEBRADIO_URI_REGEX.match(uri):
+                service = 'webradio'
+            elif self.SPOTIFY_TRACK_REGEX.match(uri):
+                service = 'spop'
+            logger.debug("No service on item; inferred %r for %s", service, uri)
+
+        if not service:
+            logger.warning("Refusing to play %s: no service to route it to", uri)
+            return
+
+        logger.debug("Play %s via %s", uri, service)
+        self._send('addPlay', {'status': 'play', 'service': service, 'uri': uri})
 
 
     def play_all(self, container_uri: str, service: Optional[str] = None) -> None:

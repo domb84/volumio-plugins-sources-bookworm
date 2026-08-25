@@ -562,7 +562,10 @@ class MenuManager:
         logger.debug("item link: %s", button_link)
         logger.debug("item service: %s", button_service)
         self.display_message(button_name.lstrip('+'), autoscroll=True)
-        self.volumioQ.put({'button': button_link})
+        # The owning service travels with the item. Volumio routes addPlay by
+        # service name, and guessing it from the URI later gets it wrong (the
+        # Spotify plugin registers as "spop", not "spotify").
+        self.volumioQ.put({'button': button_link, 'service': button_service})
 
 
     def dimmer(self):
