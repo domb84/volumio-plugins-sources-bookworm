@@ -168,6 +168,8 @@ class TestBrowseRefreshAfterRemoval:
         v = Volumio.__new__(Volumio)
         v.menuManagerQ = queue.Queue()
         v._last_browse_uri = None
+        v._last_browse_kind = None
+        v._browse_kinds = {}
         v._refresh_browse = False
         v._refresh_timer = None
         v.get_sources = Mock()
@@ -205,6 +207,7 @@ class TestPushBrowseSources:
     def _volumio(self):
         v = Volumio.__new__(Volumio)
         v.menuManagerQ = queue.Queue()
+        v._browse_kinds = {}
         return v
 
     def _configuration_item(self, v):
@@ -392,3 +395,81 @@ class TestPlayAll:
         v = self._volumio()
         v.play_all('')
         v._send.assert_not_called()
+
+
+class TestPlayAllSurvivesBackNavigation:
+    """Regression: leaving a playlist and re-entering it lost Play All.
+
+    The back button restores menus from menu_manager's history without
+    re-browsing, so the listing that identified an item as a container never
+    arrives again. When the kind map was replaced per listing rather than
+    accumulated, re-entering the same playlist looked up a URI the map no longer
+    held and Play All silently disappeared until the user went back to the main
+    menu.
+    """
+
+    CATEGORY = 'spotify/category/afro'
+    PLAYLIST = 'spotify:playlist:abonten'
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v._send = Mock()
+        v.menuManagerQ = queue.Queue()
+        v._refresh_timer = None
+        v._refresh_browse = False
+        v._last_browse_uri = None
+        v._last_browse_kind = None
+        v._browse_kinds = {}
+        return v
+
+    def _drain(self):
+        item = None
+        while not self._v.menuManagerQ.empty():
+            item = self._v.menuManagerQ.get_nowait()
+        return item
+
+    def _browse_category(self):
+        """The Afro category: a list of playlists, typed 'folder'."""
+        self._v._process_button_item(self.CATEGORY)
+        self._v._on_push_browse_library({'navigation': {'lists': [{'items': [
+            {'title': 'Abonten', 'uri': self.PLAYLIST, 'service': 'spop',
+             'type': 'folder', 'position': 0},
+        ]}]}})
+        return self._drain()
+
+    def _enter_playlist(self):
+        """Abonten itself: a list of tracks."""
+        self._v._process_button_item(self.PLAYLIST)
+        self._v._on_push_browse_library({'navigation': {'lists': [{'items': [
+            {'title': 'A Song', 'uri': 'spotify:track:1', 'service': 'spop',
+             'type': 'song', 'position': 0},
+        ]}]}})
+        return self._drain()
+
+    def test_play_all_survives_leaving_and_re_entering(self):
+        self._v = v = self._volumio()
+
+        self._browse_category()
+        assert self._enter_playlist()['play_all'], "first entry should offer Play All"
+
+        # Back: menu_manager restores the category from its own history, so no
+        # browse happens and nothing repopulates the kind map.
+        assert self._enter_playlist()['play_all'], "re-entry should still offer Play All"
+
+    def test_track_listing_does_not_evict_the_playlist_it_came_from(self):
+        self._v = v = self._volumio()
+        self._browse_category()
+        self._enter_playlist()          # track listing arrives
+        assert self.PLAYLIST in v._browse_kinds
+        assert v._browse_kinds[self.PLAYLIST] == ('folder', 'spop')
+
+    def test_kind_map_is_bounded(self):
+        from includes.volumio import BROWSE_KIND_CACHE_MAX
+        self._v = v = self._volumio()
+        v._remember_browse_kinds([
+            {'uri': 'u%d' % i, 'type': 'song', 'service': 'spop'}
+            for i in range(BROWSE_KIND_CACHE_MAX + 500)
+        ])
+        assert len(v._browse_kinds) == BROWSE_KIND_CACHE_MAX
+        assert 'u0' not in v._browse_kinds          # oldest evicted
+        assert 'u%d' % (BROWSE_KIND_CACHE_MAX + 499) in v._browse_kinds

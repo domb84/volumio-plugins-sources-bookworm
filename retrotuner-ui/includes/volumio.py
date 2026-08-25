@@ -33,6 +33,12 @@ PLAYALL_NO_SERVICE = '-'
 # unexplodable shape (spotify/category/<id>) is typed 'streaming-category'.
 CONTAINER_TYPES = ('playlist', 'album', 'artist', 'folder')
 
+# Cap on the remembered uri -> (type, service) map. It accumulates rather than
+# tracking just the current listing (see _remember_browse_kinds), so it needs a
+# bound; an evicted entry is simply re-learned the next time its listing is
+# browsed.
+BROWSE_KIND_CACHE_MAX = 2000
+
 # set socketio logging
 logging.getLogger('socketio').setLevel(logging.WARNING)
 
@@ -607,11 +613,23 @@ class Volumio:
         Volumio reports an item's type only in the listing that contains it; by
         the time we are inside it that listing is gone, so it has to be captured
         on the way past.
+
+        Accumulated, never replaced. The back button restores menus from
+        menu_manager's history without re-browsing, so the listing that told us
+        about an item may never arrive again -- replacing the map meant that
+        leaving a playlist and re-entering it lost the fact that it was a
+        playlist, and Play All vanished until the user returned to the main menu.
         """
-        self._browse_kinds = {
-            item['uri']: (item.get('type'), item.get('service'))
-            for item in sources_list if item.get('uri')
-        }
+        for item in sources_list:
+            uri = item.get('uri')
+            if uri:
+                self._browse_kinds[uri] = (item.get('type'), item.get('service'))
+
+        # Dicts keep insertion order, so this drops the oldest entries first.
+        excess = len(self._browse_kinds) - BROWSE_KIND_CACHE_MAX
+        if excess > 0:
+            for stale in list(self._browse_kinds)[:excess]:
+                del self._browse_kinds[stale]
 
     def _play_all_uri(self) -> Optional[str]:
         """The "Play All" entry for the list on screen, or None if it makes no sense.
