@@ -215,6 +215,22 @@
     "type": "boolean",
     "value": true
   },
+  "clockBackgroundColor": {
+    "type": "string",
+    "value": ""
+  },
+  "clockFrameColor": {
+    "type": "string",
+    "value": ""
+  },
+  "clockFaceColor": {
+    "type": "string",
+    "value": ""
+  },
+  "clockFontColor": {
+    "type": "string",
+    "value": ""
+  },
   "useCustomLayout": {
     "type": "boolean",
     "value": false

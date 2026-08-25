@@ -538,6 +538,7 @@
             { "value": "analogClock", "label": "TRANSLATE.IDLE_SCREEN_ANALOG_CLOCK" },
             { "value": "digitalClock", "label": "TRANSLATE.IDLE_SCREEN_DIGITAL_CLOCK" },
             { "value": "flipClock", "label": "TRANSLATE.IDLE_SCREEN_FLIP_CLOCK" },
+            { "value": "ledMatrixClock", "label": "TRANSLATE.IDLE_SCREEN_LED_MATRIX_CLOCK" },
             { "value": "weatherCurrent", "label": "TRANSLATE.IDLE_SCREEN_WEATHER_CURRENT" },
             { "value": "weatherHourly", "label": "TRANSLATE.IDLE_SCREEN_WEATHER_HOURLY" },
             { "value": "weatherDaily", "label": "TRANSLATE.IDLE_SCREEN_WEATHER_DAILY" },
@@ -580,7 +581,7 @@
       },
       "saveButton": {
         "label": "TRANSLATE.SAVE",
-        "data": ["use24Hour", "wallpaperShowSeconds", "showWeatherInClock", "analogClockShowDate"]
+        "data": ["use24Hour", "wallpaperShowSeconds", "showWeatherInClock", "analogClockShowDate", "clockBackgroundColor", "clockFrameColor", "clockFaceColor", "clockFontColor"]
       },
       "content": [
         {
@@ -614,6 +615,38 @@
           "label": "TRANSLATE.ANALOG_CLOCK_SHOW_DATE",
           "doc": "TRANSLATE.ANALOG_CLOCK_SHOW_DATE_DESC",
           "value": true
+        },
+        {
+          "id": "clockBackgroundColor",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.CLOCK_BACKGROUND_COLOR",
+          "doc": "TRANSLATE.CLOCK_BACKGROUND_COLOR_DESC",
+          "value": ""
+        },
+        {
+          "id": "clockFrameColor",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.CLOCK_FRAME_COLOR",
+          "doc": "TRANSLATE.CLOCK_FRAME_COLOR_DESC",
+          "value": ""
+        },
+        {
+          "id": "clockFaceColor",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.CLOCK_FACE_COLOR",
+          "doc": "TRANSLATE.CLOCK_FACE_COLOR_DESC",
+          "value": ""
+        },
+        {
+          "id": "clockFontColor",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.CLOCK_FONT_COLOR",
+          "doc": "TRANSLATE.CLOCK_FONT_COLOR_DESC",
+          "value": ""
         }
       ]
     },
