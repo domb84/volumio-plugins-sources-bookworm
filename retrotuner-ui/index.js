@@ -42,12 +42,8 @@ retrotunerui.prototype.ensureSpiInUserConfig = function () {
 
     // A file with no trailing newline would otherwise glue our line onto
     // whatever came last, silently breaking both settings.
-    if (contents.length > 0 && !contents.endsWith('
-')) { contents += '
-'; }
-    contents += SPI_USERCONFIG_COMMENT + '
-' + SPI_USERCONFIG_LINE + '
-';
+    if (contents.length > 0 && !contents.endsWith('\n')) { contents += '\n'; }
+    contents += SPI_USERCONFIG_COMMENT + '\n' + SPI_USERCONFIG_LINE + '\n';
 
     try {
         fs.writeFileSync(USERCONFIG_PATH, contents, 'utf8');
