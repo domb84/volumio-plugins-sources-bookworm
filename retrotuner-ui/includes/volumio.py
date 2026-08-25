@@ -622,13 +622,24 @@ class Volumio:
         """
         uri = self._last_browse_uri
         if not uri or uri.startswith('system://'):
+            logger.debug("No Play All: not inside a browsable container (uri=%r)", uri)
             return None
 
         kind = self._last_browse_kind
-        if not kind or kind[0] not in CONTAINER_TYPES:
+        if not kind:
+            logger.debug(
+                "No Play All: never saw %r in a listing, so its type is unknown "
+                "(known: %s)", uri, sorted(self._browse_kinds)[:8],
+            )
+            return None
+        if kind[0] not in CONTAINER_TYPES:
+            logger.debug("No Play All: %r is type %r, not one of %s",
+                         uri, kind[0], CONTAINER_TYPES)
             return None
 
-        return '%s%s/%s' % (PLAYALL_URI_PREFIX, kind[1] or PLAYALL_NO_SERVICE, uri)
+        play_all = '%s%s/%s' % (PLAYALL_URI_PREFIX, kind[1] or PLAYALL_NO_SERVICE, uri)
+        logger.debug("Offering Play All for %r (type %r): %s", uri, kind[0], play_all)
+        return play_all
 
     def _format_browse_items(self, items):
         sources_list = []

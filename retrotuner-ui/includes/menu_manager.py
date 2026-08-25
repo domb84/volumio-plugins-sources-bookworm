@@ -505,11 +505,15 @@ class MenuManager:
         # first when this menu is restored from back-history (remember() saves
         # each item's position and build_menu sorts by it).
         if play_all_uri and any(not is_folder(i) for i in menu):
+            logger.debug("Adding %s -> %s", PLAY_ALL_LABEL, play_all_uri)
             self.menu.append_item(
                 FunctionItem(PLAY_ALL_LABEL, self.resolve_item,
                              [counter, PLAY_ALL_LABEL, play_all_uri, None])
             )
             counter += 1
+        elif play_all_uri:
+            logger.debug("Play All offered (%s) but no playable items in this list",
+                         play_all_uri)
 
         for i in menu:
             logger.debug("Menu input: %s", i)
