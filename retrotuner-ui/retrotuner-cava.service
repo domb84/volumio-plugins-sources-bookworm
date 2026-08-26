@@ -1,0 +1,21 @@
+[Unit]
+Description=retrotuner-ui audio analyser (cava)
+# Only meaningful once audio exists; volumio owns the ALSA config that creates
+# the tap this reads.
+After=volumio.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=volumio
+Group=volumio
+# cava is the permanent reader of the tap fifo. If it stops while the tap is in
+# the ALSA chain, the fifo fills within a fraction of a second and playback
+# stops -- so it restarts aggressively and is never stopped while the tap is
+# installed.
+ExecStart=/usr/bin/cava -p /data/plugins/user_interface/retrotuner-ui/cava/retrotuner-cava.conf
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

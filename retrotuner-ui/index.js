@@ -78,9 +78,9 @@ retrotunerui.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
-// Audio tap for the hidden level meter. Only does anything when the optional
-// asound config has been dropped in by hand (see contrib/AUDIO_TAP.md) -- the
-// tap redefines the output chain, so it is never enabled behind the user's back.
+// Audio tap for the hidden level meter. cava reads this fifo and publishes the
+// analysed bars; the python service only draws them. Gated on the asound config
+// being present so the tap is never spliced into the output chain by accident.
 var AUDIO_TAP_CONF = 'rt_in.rt_out.8.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
@@ -124,7 +124,7 @@ retrotunerui.prototype.setupAudioTap = function () {
 retrotunerui.prototype.onStart = function() {
     var self = this;
 
-    self.setupAudioTap();
+    const tapEnabled = self.setupAudioTap();
 
     // SPI is on by default, so a fresh install would otherwise never add the
     // boot parameter -- no settings save ever happens. Logged rather than
@@ -136,6 +136,11 @@ retrotunerui.prototype.onStart = function() {
 
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
+        .then(function () {
+            // Only when the tap is installed: without the tap cava has nothing
+            // to read, and with the tap but no cava, playback stalls.
+            return tapEnabled ? self.cavaServiceCmds('start') : libQ.resolve();
+        })
         .then(function () { return self.retrotuneruiServiceCmds('start'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error starting: ' + e); });
 };
@@ -144,6 +149,7 @@ retrotunerui.prototype.onStop = function() {
     var self = this;
 
     return self.retrotuneruiServiceCmds('stop')
+        .then(function () { return self.cavaServiceCmds('stop'); })
         .then(function () { return self.pigpiodServiceCmds('stop'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error stopping: ' + e); });
 };
@@ -160,6 +166,11 @@ retrotunerui.prototype.onRestart = function() {
     // running daemon is left untouched — restarting it here races the controls'
     // pigpio reconnect and leaves the rotary encoder dead until the next restart.
     // Config changes never require pigpiod to restart.
+    //
+    // cava is deliberately left alone too, and for a sharper reason: it is the
+    // only reader of the audio tap, and bouncing it would leave the fifo unread
+    // long enough for ALSA to block and playback to stop. Settings saves restart
+    // this plugin routinely, so that would cut the music every time.
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
@@ -798,4 +809,11 @@ retrotunerui.prototype.retrotuneruiServiceCmds = function (cmd) {
 
 retrotunerui.prototype.pigpiodServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'pigpiod.service');
+};
+
+// cava reads the audio tap and publishes the analysed bars. It must run for as
+// long as the tap is in the ALSA chain -- not just while the meter is on screen
+// -- because an unread fifo blocks ALSA and stops playback.
+retrotunerui.prototype.cavaServiceCmds = function (cmd) {
+    return this.systemctl(cmd, 'retrotuner-cava.service');
 };

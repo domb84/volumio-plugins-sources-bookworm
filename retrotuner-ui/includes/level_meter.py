@@ -1,32 +1,32 @@
-"""Scrolling audio level display for a 16x2 HD44780-compatible VFD.
+"""Spectrum display for a 16x2 HD44780-compatible VFD.
 
 Hidden beta feature, reached by long-pressing the dimmer button.
 
-A true oscilloscope trace is impossible here: the controller has only 8
-user-definable glyphs (CGRAM), so at most 8 distinct pixel patterns can be on
-screen at once, and a scope line needs a different arbitrary pattern in every
-column. A *bar* display works because all 16 columns draw from the same 8
-glyphs -- bar heights 1/8 to 8/8 -- so this shows the level envelope over time
-instead: each column is one recent time slice, scrolling right to left, which
-reads much like a waveform.
+All the signal processing is done by cava (see cava/retrotuner-cava.conf), which
+reads the raw audio tap and writes one line of 16 numbers per frame. This module
+only turns those numbers into characters, which is why there is no DSP here.
 
-Audio comes from a raw PCM tap (see contrib/AUDIO_TAP.md).
+That split is deliberate rather than lazy:
+
+  * cava holds the tap fifo open permanently. An unread fifo fills its 64kB
+    buffer in ~0.37s, at which point ALSA blocks on write and playback stops --
+    so whatever reads the tap must never pause. cava is a separate service, so
+    restarting this plugin (which happens on every settings save) cannot
+    interrupt audio.
+  * the FFT, log frequency scaling and falloff happen in C, not here, next to
+    the SPI button polling and under the same GIL.
+
+A true oscilloscope trace remains impossible on this hardware: the controller
+has only 8 user-definable glyphs, so at most 8 distinct pixel patterns can be on
+screen at once and a scope line needs a different one per column. Bars work
+because all 16 columns share the same glyph set.
 """
-import array
 import logging
-import math
 import os
-import select
 import threading
 import time
-from collections import deque
 
 logger = logging.getLogger("Level Meter")
-
-try:                                    # removed from the stdlib in python 3.13
-    import audioop as _audioop
-except ImportError:                     # pragma: no cover - depends on runtime
-    _audioop = None
 
 LCD_COLUMNS = 16
 LCD_ROWS = 2
@@ -36,34 +36,17 @@ LCD_ROWS = 2
 # frames safe to build as ordinary strings.
 BAR_GLYPHS = tuple(range(8))
 
-# Rows of pixels in one character cell. Two rows of cells therefore give 16
-# vertical steps for a column.
+# Rows of pixels in one character cell. Two rows of cells give 16 vertical steps
+# per column, which is what cava's ascii_max_range is set to.
 CELL_ROWS = 8
 MAX_LEVEL = CELL_ROWS * LCD_ROWS
 
-# Raw PCM tap. Signed 16-bit little-endian stereo, which the ALSA config forces
-# regardless of what rate the hardware is running at.
-DEFAULT_FIFO_PATH = "/tmp/retrotuner-audio.fifo"
-SAMPLE_BYTES = 2
-CHANNELS = 2
+# cava's raw ascii output: one line per frame, values separated by ";".
+DEFAULT_BARS_PATH = "/tmp/retrotuner-bars"
+BAR_SEPARATOR = ';'
 
-# The tap must be drained continuously, at the rate audio is produced: 44.1kHz
-# stereo S16 is 176kB/s and a linux pipe holds only 64kB, so letting it fill
-# blocks the ALSA writer and stops playback within about a third of a second.
-# Draining therefore runs in its own thread for as long as the tap exists,
-# whether or not the meter is on screen; rendering only samples what it finds.
-DRAIN_BYTES = 16384
-DRAIN_POLL = 0.2               # select() timeout, so stopping stays responsive
-
-FRAME_INTERVAL = 0.05          # 20fps ceiling; the display cannot keep up with more
-SILENCE_TIMEOUT = 2.0          # after this long with no audio, show the idle message
-
-# Peak sample value for S16. Levels are scaled against this.
-FULL_SCALE = 32767.0
-
-# Below this the input is treated as silence rather than drawn as a 1-pixel bar,
-# which otherwise leaves a permanent line of dots across the display.
-SILENCE_FLOOR = 0.005
+FRAME_INTERVAL = 0.05          # matches cava's framerate; 20fps
+SILENCE_TIMEOUT = 2.0          # after this long with every bar at zero, say so
 
 
 def bar_bitmaps():
@@ -79,61 +62,28 @@ def bar_bitmaps():
     return glyphs
 
 
-def _peak_raw(pcm_bytes):
-    """Largest absolute sample in an S16_LE buffer.
+def parse_bars(line):
+    """Turn one line of cava raw ascii output into a list of column levels.
 
-    audioop does this in C. It matters more than it looks: scanning the stream
-    in interpreted python costs ~80x more, on a Pi, in the same process and
-    under the same GIL as the SPI button polling -- and this runs continuously,
-    not only while the meter is visible. audioop was removed in python 3.13,
-    hence the fallback.
+    cava emits "3;7;12;16;..." with a trailing separator, and is configured with
+    ascii_max_range to match the display, so the values need no scaling. Short,
+    long or malformed lines are tolerated: a partially written line is normal
+    when reading a fifo that a separate process is appending to.
     """
-    if _audioop is not None:
-        return _audioop.max(pcm_bytes, SAMPLE_BYTES)
+    if not line:
+        return []
 
-    samples = array.array('h')
-    samples.frombytes(pcm_bytes)
-    peak = 0
-    for sample in samples:
-        if sample < 0:
-            sample = -sample
-        if sample > peak:
-            peak = sample
-    return peak
+    levels = []
+    for field in line.strip().split(BAR_SEPARATOR):
+        if not field:
+            continue
+        try:
+            value = int(field)
+        except ValueError:
+            continue                      # partial write; drop the fragment
+        levels.append(max(0, min(value, MAX_LEVEL)))
 
-
-def peak_level(pcm_bytes):
-    """Peak amplitude of a raw S16_LE buffer, as 0.0-1.0.
-
-    Peak rather than RMS: on a 16-step display RMS reads as an almost static
-    mid-level bar, while peak actually moves with the music.
-    """
-    if not pcm_bytes:
-        return 0.0
-
-    # Both paths need a whole number of samples; a short read from the fifo can
-    # leave a trailing odd byte.
-    usable = len(pcm_bytes) - (len(pcm_bytes) % SAMPLE_BYTES)
-    if usable <= 0:
-        return 0.0
-
-    return min(_peak_raw(pcm_bytes[:usable]) / FULL_SCALE, 1.0)
-
-
-def scale_level(level):
-    """Map a 0.0-1.0 amplitude onto 0..MAX_LEVEL pixel rows, logarithmically.
-
-    Linear scaling wastes most of the display: normal listening levels sit in
-    the bottom couple of steps and everything looks flat. This is roughly a dB
-    scale over a 40dB window, which spreads real music across the full height.
-    """
-    if level <= SILENCE_FLOOR:
-        return 0
-
-    db = 20.0 * math.log10(level)
-    normalised = (db + 40.0) / 40.0        # -40dB -> 0.0, 0dB -> 1.0
-    normalised = max(0.0, min(normalised, 1.0))
-    return max(1, int(round(normalised * MAX_LEVEL)))
+    return levels[:LCD_COLUMNS]
 
 
 def render_columns(levels):
@@ -161,137 +111,44 @@ def render_columns(levels):
 
 
 class LevelMeter:
-    """Drains the PCM tap continuously and draws it when asked.
+    """Draws cava's output on the display until stopped.
 
-    Draining and rendering are deliberately separate. The fifo has to be emptied
-    at the full stream rate or ALSA blocks and playback stops, so the drain
-    thread runs for as long as the tap exists. Showing the meter only starts a
-    second thread, which samples the peak the drain thread has accumulated.
+    Nothing here touches the audio path: cava owns the tap, and this only reads
+    the small numbers it publishes. Stopping, crashing or restarting this has no
+    effect on playback.
     """
 
-    def __init__(self, menu, fifo_path=DEFAULT_FIFO_PATH, on_stop=None):
+    def __init__(self, menu, bars_path=DEFAULT_BARS_PATH, on_stop=None):
         self._menu = menu
-        self._fifo_path = fifo_path
+        self._bars_path = bars_path
         self._on_stop = on_stop
-
-        self._drain_thread = None
-        self._drain_stop = threading.Event()
-
-        self._render_thread = None
-        self._render_stop = threading.Event()
-
-        self._peak_lock = threading.Lock()
-        self._peak = 0              # highest sample seen since the last frame
-        self._last_sound = 0.0
-
+        self._thread = None
+        self._stop = threading.Event()
         self._glyphs_loaded = False
-        self._history = deque([0] * LCD_COLUMNS, maxlen=LCD_COLUMNS)
-
-    # --- draining ---------------------------------------------------------
-
-    @property
-    def draining(self):
-        return self._drain_thread is not None and self._drain_thread.is_alive()
-
-    def start_drain(self):
-        """Begin emptying the fifo. Returns False when no tap is installed.
-
-        Must be running whenever the ALSA tap is in the chain, or playback
-        stalls. Deliberately not tied to the meter being visible.
-        """
-        if self.draining:
-            return True
-        if not self._fifo_available():
-            return False
-
-        self._drain_stop.clear()
-        self._drain_thread = threading.Thread(target=self._drain_loop,
-                                              name="AudioTapDrainThread", daemon=True)
-        self._drain_thread.start()
-        logger.info("Audio tap drain started (%s)", self._fifo_path)
-        return True
-
-    def stop_drain(self):
-        self._drain_stop.set()
-        thread, self._drain_thread = self._drain_thread, None
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=1.0)
-
-    def _drain_loop(self):
-        fd = None
-        try:
-            # Non-blocking open: a fifo with no writer would otherwise block
-            # here until something starts playing.
-            fd = os.open(self._fifo_path, os.O_RDONLY | os.O_NONBLOCK)
-            while not self._drain_stop.is_set():
-                ready, _, _ = select.select([fd], [], [], DRAIN_POLL)
-                if not ready:
-                    continue
-                # Read until empty rather than one chunk per wake-up: falling
-                # behind the stream rate is exactly what stalls playback.
-                while True:
-                    try:
-                        chunk = os.read(fd, DRAIN_BYTES)
-                    except (BlockingIOError, InterruptedError):
-                        break
-                    if not chunk:
-                        break
-                    self._record_peak(chunk)
-                    if len(chunk) < DRAIN_BYTES:
-                        break
-        except Exception as e:
-            logger.error("Audio tap drain stopped: %s", e)
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
-            logger.info("Audio tap drain stopped")
-
-    def _record_peak(self, chunk):
-        usable = len(chunk) - (len(chunk) % SAMPLE_BYTES)
-        if usable <= 0:
-            return
-        peak = _peak_raw(chunk[:usable])
-        with self._peak_lock:
-            if peak > self._peak:
-                self._peak = peak
-        if peak / FULL_SCALE > SILENCE_FLOOR:
-            self._last_sound = time.monotonic()
-
-    def _take_peak(self):
-        """Peak since the previous frame, reset ready for the next one."""
-        with self._peak_lock:
-            peak, self._peak = self._peak, 0
-        return min(peak / FULL_SCALE, 1.0)
-
-    # --- rendering --------------------------------------------------------
 
     @property
     def running(self):
-        return self._render_thread is not None and self._render_thread.is_alive()
+        return self._thread is not None and self._thread.is_alive()
 
     def start(self):
         if self.running:
             return False
-        if not self.start_drain():
-            logger.warning("No audio tap at %s; not starting the level meter",
-                           self._fifo_path)
-            self._menu.message("NO AUDIO TAP".ljust(LCD_COLUMNS))
+        if not self._bars_available():
+            logger.warning("No cava output at %s; is retrotuner-cava running?",
+                           self._bars_path)
+            self._menu.message("NO ANALYSER".ljust(LCD_COLUMNS))
             return False
 
-        self._render_stop.clear()
-        self._render_thread = threading.Thread(target=self._render_loop,
-                                               name="LevelMeterThread", daemon=True)
-        self._render_thread.start()
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="LevelMeterThread",
+                                        daemon=True)
+        self._thread.start()
         logger.info("Level meter started")
         return True
 
     def stop(self):
-        """Stop drawing. Draining continues -- stopping it would stall audio."""
-        self._render_stop.set()
-        thread, self._render_thread = self._render_thread, None
+        self._stop.set()
+        thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)
         logger.info("Level meter stopped")
@@ -302,9 +159,9 @@ class LevelMeter:
             return False
         return self.start()
 
-    def _fifo_available(self):
+    def _bars_available(self):
         try:
-            return os.path.exists(self._fifo_path)
+            return os.path.exists(self._bars_path)
         except Exception:
             return False
 
@@ -315,25 +172,54 @@ class LevelMeter:
             self._menu.create_char(location, bitmap)
         self._glyphs_loaded = True
 
-    def _render_loop(self):
+    def _run(self):
+        handle = None
+        last_sound = time.monotonic()
         try:
             self._load_glyphs()
-            while not self._render_stop.is_set():
+            # Non-blocking: cava may not have opened its end yet, and a blocking
+            # open would hang the button press until it did.
+            fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
+            handle = os.fdopen(fd, 'r', buffering=1, errors='replace')
+
+            while not self._stop.is_set():
                 started = time.monotonic()
 
-                self._history.append(scale_level(self._take_peak()))
+                # Drain to the newest complete line: cava writes faster than the
+                # display can keep up, and showing a stale frame is worse than
+                # skipping to the current one.
+                latest = None
+                while True:
+                    try:
+                        line = handle.readline()
+                    except (BlockingIOError, InterruptedError):
+                        break
+                    if not line:
+                        break
+                    if line.endswith('\n'):
+                        latest = line
 
-                if started - self._last_sound > SILENCE_TIMEOUT:
+                if latest is not None:
+                    levels = parse_bars(latest)
+                    if levels:
+                        if any(levels):
+                            last_sound = started
+                        self._menu.render_frame(render_columns(levels))
+
+                if started - last_sound > SILENCE_TIMEOUT:
                     self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
-                else:
-                    self._menu.render_frame(render_columns(self._history))
 
                 remaining = FRAME_INTERVAL - (time.monotonic() - started)
                 if remaining > 0:
-                    self._render_stop.wait(remaining)
+                    self._stop.wait(remaining)
         except Exception as e:
             logger.error("Level meter stopped on error: %s", e)
         finally:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             if self._on_stop is not None:
                 try:
                     self._on_stop()

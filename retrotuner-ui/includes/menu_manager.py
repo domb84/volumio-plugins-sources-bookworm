@@ -84,13 +84,9 @@ class MenuManager:
         self._display.on()
         self.menu.message(('Initialising...').upper(), autoscroll=True)
 
-        # If the optional audio tap is installed, something must empty its fifo
-        # continuously or ALSA blocks on write and playback stops within about a
-        # third of a second. That is true whether or not the meter is on screen,
-        # so draining starts here rather than with the display.
+        # cava owns the audio tap and does the analysis; this only draws what it
+        # publishes, so nothing here can affect playback.
         self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
-        if self._level_meter.start_drain():
-            logger.info("Audio tap present; draining it")
 
         # render main menu
         self.volumioQ.put({'button': 'menu'})

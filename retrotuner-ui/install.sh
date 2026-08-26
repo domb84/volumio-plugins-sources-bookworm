@@ -25,7 +25,11 @@ apt-get update
 # broke playback and crash-looped upmpdcli. python3-rpi.gpio/python3-spidev
 # are ordinary application packages, so they depend on python3 by a normal
 # range (any 3.11.x) rather than an exact pin, and don't drag in that upgrade.
-apt-get -y --no-install-recommends install pigpio python3-rpi.gpio python3-spidev
+# cava analyses the audio tap for the level meter: it does the FFT in C and,
+# just as importantly, holds the tap fifo open permanently. An unread fifo fills
+# its 64kB buffer in ~0.37s, at which point ALSA blocks on write and playback
+# stops -- so the reader must never pause.
+apt-get -y --no-install-recommends install pigpio python3-rpi.gpio python3-spidev cava
 
 # Create an isolated virtual environment for the plugin's remaining pure-
 # Python dependencies, so they never clash with the system / other plugins.
@@ -55,6 +59,7 @@ sed -i "/ExecStart=/c\ExecStart=/usr/bin/pigpiod -t 0" /lib/systemd/system/pigpi
 sed -i "s/bcm2835-gpiomem/gpiomem/g" /etc/udev/rules.d/99-com.rules
 
 cp "${PLUGIN_DIR}/retrotuner-ui.service" /lib/systemd/system/
+cp "${PLUGIN_DIR}/retrotuner-cava.service" /lib/systemd/system/
 
 systemctl daemon-reload -q
 
