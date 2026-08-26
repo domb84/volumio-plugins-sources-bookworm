@@ -52,7 +52,9 @@ READ_CHUNK = 4096
 # something other than cava writing) growing the buffer forever.
 MAX_PENDING = 64 * 1024
 
-FRAME_INTERVAL = 0.05          # matches cava's framerate; 20fps
+# Must match "framerate" in cava/retrotuner-cava.conf -- see the note there.
+FRAMES_PER_SECOND = 60
+FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
 SILENCE_TIMEOUT = 2.0          # after this long with every bar at zero, say so
 
 

@@ -23,7 +23,12 @@ uvicorn
 # Retry helper used by the Volumio client
 tenacity
 
-# LCD menu library (forked). Needs 2.2.0 or later for create_char() and
-# render_frame(), which the level meter uses -- against anything older it fails
-# at runtime with AttributeError rather than at install time.
-git+https://github.com/domb84/rpi-lcd-menu.git@master
+# LCD menu library (forked). Needs create_char() and render_frame(), which the
+# level meter uses -- against anything older than 2.2.0 it fails at runtime with
+# AttributeError rather than at install time.
+#
+# Pinned to a branch while the render-performance work is tested: the meter runs
+# at 60fps (see cava/retrotuner-cava.conf) and master still writes a frame in
+# ~14ms, which would spend 84% of wall time mid-render. Move this back to
+# @master once the branch is merged.
+git+https://github.com/domb84/rpi-lcd-menu.git@improve-render-performance

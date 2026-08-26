@@ -7,6 +7,8 @@ from unittest.mock import Mock
 
 from includes.level_meter import (
     CELL_ROWS,
+    FRAME_INTERVAL,
+    FRAMES_PER_SECOND,
     LCD_COLUMNS,
     MAX_LEVEL,
     LevelMeter,
@@ -217,3 +219,29 @@ class TestQuietStart:
         meter = LevelMeter(menu, bars_path='/nonexistent')
         assert meter.start() is False
         menu.message.assert_called_once()
+
+
+class TestFrameRateMatchesCava:
+    """Our draw interval and cava's framerate are two halves of one setting.
+
+    cava caps how many distinct frames exist; FRAME_INTERVAL caps how often we
+    draw one. If they drift apart the display either redraws frames it has
+    already shown or throws away frames cava computed -- neither is visible as a
+    failure, it just quietly wastes one side or the other.
+    """
+
+    def _cava_framerate(self):
+        import os
+        import re
+        conf = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'cava', 'retrotuner-cava.conf')
+        with open(conf) as handle:
+            match = re.search(r'^framerate\s*=\s*(\d+)', handle.read(), re.M)
+        assert match, "no framerate in the cava config"
+        return int(match.group(1))
+
+    def test_the_two_rates_agree(self):
+        assert self._cava_framerate() == FRAMES_PER_SECOND
+
+    def test_the_interval_is_the_reciprocal_of_the_rate(self):
+        assert FRAME_INTERVAL == 1.0 / FRAMES_PER_SECOND
