@@ -23,8 +23,7 @@ uvicorn
 # Retry helper used by the Volumio client
 tenacity
 
-# LCD menu library (forked). Pinned to the branch carrying create_char() and
-# render_frame(), which the level meter needs -- master has neither, and an
-# unpinned install would fetch it and fail at runtime with AttributeError.
-# Move this back to a tag or master once the branch is merged.
-git+https://github.com/domb84/rpi-lcd-menu.git@add-waveform-rendering
+# LCD menu library (forked). Needs 2.2.0 or later for create_char() and
+# render_frame(), which the level meter uses -- against anything older it fails
+# at runtime with AttributeError rather than at install time.
+git+https://github.com/domb84/rpi-lcd-menu.git@master
