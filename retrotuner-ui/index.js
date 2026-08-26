@@ -3,6 +3,7 @@
 var libQ = require('kew');
 var fs = require('fs-extra');
 var exec = require('child_process').exec;
+var execSync = require('child_process').execSync;
 
 // Dropped just before a self-triggered restart so the python service can tell a
 // restart (capture/settings save) apart from a genuine stop/shutdown.
@@ -102,11 +103,25 @@ retrotunerui.prototype.setupAudioTap = function () {
         fs.removeSync(AUDIO_TAP_FIFO);
         // As the volumio user, not root: this process runs as root (see
         // serviceCmds) and the python service that reads the fifo does not.
-        exec('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, { uid: 1000, gid: 1000 }, function (e) {
-            if (e) { self.logger.error('RetroTuner UI - could not create audio tap fifo: ' + e); }
-        });
+        execSync('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, { uid: 1000, gid: 1000 });
     } catch (e) {
         self.logger.error('RetroTuner UI - could not prepare audio tap fifo: ' + e);
+    }
+
+    // Hold the fifo open read-write for the life of the plugin, and never read
+    // from it. Without this, cava starts before anything is playing, finds no
+    // writer, gets EOF immediately and stops pulling -- which is why it needed
+    // restarting by hand once audio began. A permanently attached writer means
+    // the fifo never reports EOF, so cava simply blocks until audio arrives.
+    //
+    // O_RDWR rather than O_WRONLY: opening a fifo write-only blocks until a
+    // reader appears, which would hang plugin start.
+    try {
+        if (self._tapKeepAliveFd === undefined || self._tapKeepAliveFd === null) {
+            self._tapKeepAliveFd = fs.openSync(AUDIO_TAP_FIFO, 'r+');
+        }
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not hold the audio tap open: ' + e);
     }
 
     // Volumio only folds plugin asound/ files into /etc/asound.conf when asked;
@@ -147,6 +162,13 @@ retrotunerui.prototype.onStart = function() {
 
 retrotunerui.prototype.onStop = function() {
     var self = this;
+
+    // Release the fifo keep-alive before stopping cava, so nothing is left
+    // holding a tap that no longer has a reader.
+    if (self._tapKeepAliveFd !== undefined && self._tapKeepAliveFd !== null) {
+        try { fs.closeSync(self._tapKeepAliveFd); } catch (e) { /* already gone */ }
+        self._tapKeepAliveFd = null;
+    }
 
     return self.retrotuneruiServiceCmds('stop')
         .then(function () { return self.cavaServiceCmds('stop'); })

@@ -183,6 +183,7 @@ class LevelMeter:
         fd = None
         pending = b''
         last_sound = time.monotonic()
+        showing_silence = False
         try:
             self._load_glyphs()
             # Non-blocking: cava may not have opened its end yet, and a blocking
@@ -223,15 +224,21 @@ class LevelMeter:
                 if len(pending) > MAX_PENDING:
                     pending = b''
 
-                if latest is not None:
-                    levels = parse_bars(latest)
-                    if levels:
-                        if any(levels):
-                            last_sound = started
-                        self._menu.render_frame(render_columns(levels))
+                levels = parse_bars(latest) if latest is not None else None
+                if levels and any(levels):
+                    last_sound = started
 
+                # Exactly one write per frame, and the silence notice is latched
+                # rather than resent. Previously both branches could fire in the
+                # same frame -- bars drawn directly, then "NO AUDIO" queued over
+                # the top 20 times a second, which reads as a violent flicker.
                 if started - last_sound > SILENCE_TIMEOUT:
-                    self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
+                    if not showing_silence:
+                        self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
+                        showing_silence = True
+                elif levels:
+                    showing_silence = False
+                    self._menu.render_frame(render_columns(levels))
 
                 remaining = FRAME_INTERVAL - (time.monotonic() - started)
                 if remaining > 0:
