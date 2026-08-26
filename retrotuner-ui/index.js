@@ -81,7 +81,7 @@ retrotunerui.prototype.onVolumioStart = function()
 // Audio tap for the hidden level meter. cava reads this fifo and publishes the
 // analysed bars; the python service only draws them. Gated on the asound config
 // being present so the tap is never spliced into the output chain by accident.
-var AUDIO_TAP_CONF = 'rt_in.rt_out.8.conf';
+var AUDIO_TAP_CONF = 'rt_in.rt_out.2.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
 retrotunerui.prototype.setupAudioTap = function () {
