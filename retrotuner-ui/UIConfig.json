@@ -407,6 +407,53 @@
       ]
     },
     {
+      "id": "level_meter",
+      "element": "section",
+      "label": "Audio Level Meter",
+      "icon": "fa-signal",
+      "description": "The spectrum display, shown by long-pressing the dimmer and after 30 seconds idle while something is playing. Higher rates look smoother but cost CPU: 60 uses roughly 20% on a Pi 3B+, 120 around 40%. Drop to 15 if button presses start feeling sluggish. Saving this restarts the analyser, which may briefly interrupt playback.",
+      "onSave": {
+        "type": "controller",
+        "endpoint": "user_interface/retrotuner-ui",
+        "method": "saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "meter_framerate"
+        ]
+      },
+      "content": [
+        {
+          "id": "meter_framerate",
+          "element": "select",
+          "label": "Refresh rate",
+          "value": {
+            "value": 60,
+            "label": "60 fps"
+          },
+          "options": [
+            {
+              "value": 15,
+              "label": "15 fps"
+            },
+            {
+              "value": 30,
+              "label": "30 fps"
+            },
+            {
+              "value": 60,
+              "label": "60 fps"
+            },
+            {
+              "value": 120,
+              "label": "120 fps"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "diagnostics",
       "element": "section",
       "label": "Diagnostics",

@@ -121,3 +121,62 @@ class TestApplyLogLevel:
     def test_true_sets_debug(self):
         index.apply_log_level({"debug_mode": {"value": True}})
         assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+
+
+class TestMeterFrameRateSettings:
+    """The refresh rate is defined in four places that cannot import each other:
+    config.json, UIConfig.json, the cava config and includes/level_meter.py.
+
+    Nothing at runtime would report a mismatch -- a stale UIConfig option would
+    just save a rate cava never runs at, and the meter would draw at a different
+    rate from the analyser. So it is pinned here instead.
+    """
+
+    def _plugin_dir(self):
+        import os
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _load(self, name):
+        import io
+        import os
+        with io.open(os.path.join(self._plugin_dir(), name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def _ui_field(self):
+        ui = self._load("UIConfig.json")
+        for section in ui["sections"]:
+            for item in section.get("content", []):
+                if item.get("id") == "meter_framerate":
+                    return section, item
+        raise AssertionError("no meter_framerate field in UIConfig.json")
+
+    def test_config_json_carries_a_default(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        default = self._load("config.json")["meter_framerate"]["value"]
+        assert int(default) == FRAMES_PER_SECOND
+
+    def test_index_py_reads_it(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        config = {"meter_framerate": {"value": "30"}}
+        assert index.parse_optional_int_field(config, "meter_framerate", FRAMES_PER_SECOND) == 30
+
+    def test_an_older_config_without_the_key_still_starts(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        assert index.parse_optional_int_field({}, "meter_framerate", FRAMES_PER_SECOND) \
+            == FRAMES_PER_SECOND
+
+    def test_the_dropdown_offers_exactly_the_supported_rates(self):
+        from includes.level_meter import SUPPORTED_FRAME_RATES
+        _section, field = self._ui_field()
+        assert tuple(o["value"] for o in field["options"]) == SUPPORTED_FRAME_RATES
+
+    def test_every_option_is_labelled_in_fps(self):
+        _section, field = self._ui_field()
+        for option in field["options"]:
+            assert option["label"] == "%d fps" % option["value"]
+
+    def test_the_field_is_saved_by_its_section(self):
+        # A field missing from saveButton.data is rendered but never submitted.
+        section, _field = self._ui_field()
+        assert "meter_framerate" in section["saveButton"]["data"]
+        assert section["onSave"]["method"] == "saveOptions"

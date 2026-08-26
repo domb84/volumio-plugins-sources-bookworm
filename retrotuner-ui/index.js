@@ -85,6 +85,36 @@ retrotunerui.prototype.onVolumioStart = function()
 var AUDIO_TAP_CONF = 'rt_in.rt_out.2.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
+// cava's own config. Its "framerate" and the python side's draw interval are two
+// halves of one setting -- cava caps how many distinct frames exist, the meter
+// caps how often one is drawn -- so the settings page writes both. This rewrites
+// the value in place rather than templating the file, because the rest of it
+// carries the notes explaining why each key is what it is.
+var CAVA_CONF = 'cava/retrotuner-cava.conf';
+
+retrotunerui.prototype.writeCavaFramerate = function (rate) {
+    const self = this;
+    const conf = __dirname + '/' + CAVA_CONF;
+
+    try {
+        const contents = fs.readFileSync(conf, 'utf8');
+        const updated = contents.replace(/^framerate\s*=.*$/m, 'framerate = ' + rate);
+        if (updated === contents) {
+            // No match means the key was renamed or removed. Saying so is the
+            // point: cava would silently keep its old rate and the meter would
+            // run at a different one from the analyser.
+            self.logger.error('RetroTuner UI - no framerate line in ' + conf + '; cava rate unchanged');
+            return false;
+        }
+        fs.writeFileSync(conf, updated, 'utf8');
+        self.logger.info('RetroTuner UI - cava framerate set to ' + rate);
+        return true;
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not write cava framerate: ' + e);
+        return false;
+    }
+};
+
 retrotunerui.prototype.setupAudioTap = function () {
     const self = this;
     const conf = __dirname + '/asound/' + AUDIO_TAP_CONF;
@@ -147,6 +177,14 @@ retrotunerui.prototype.onStart = function() {
     if (Boolean(self.config.get('spi')) && self.ensureSpiInUserConfig() === 'added') {
         self.logger.warn('RetroTuner UI - SPI enabled in ' + USERCONFIG_PATH +
             '; a reboot is required before the MCP3008 can be read');
+    }
+
+    // The cava config is reinstalled with its shipped default on every plugin
+    // update, while the chosen rate lives in config.json and survives. Reapply
+    // it here or the two silently diverge: cava analysing at one rate and the
+    // meter drawing at another, with nothing to report the mismatch.
+    if (tapEnabled) {
+        self.writeCavaFramerate(parseInt(self.config.get('meter_framerate', 60), 10) || 60);
     }
 
     // Start pigpiod first (the python controls connect to it), then our service.
@@ -251,6 +289,12 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
+            // A select carries its own label, so setting a bare number would
+            // leave the control blank until the user opened the dropdown.
+            const meterRate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
+            setValue(section('level_meter'), 'meter_framerate',
+                     { value: meterRate, label: meterRate + ' fps' });
+
             // Also new -- default matches apply_log_level()'s own fallback in index.py.
             setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
 
@@ -309,6 +353,19 @@ retrotunerui.prototype.saveOptions = function (data) {
         }
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
+
+    // A select posts {value, label}; everything else posts a bare value. Flatten
+    // it before the validation loop below, which only understands numbers and
+    // booleans and would otherwise reject the whole field.
+    if (data.hasOwnProperty('meter_framerate') && data.meter_framerate !== null &&
+        typeof data.meter_framerate === 'object') {
+        data.meter_framerate = data.meter_framerate.value;
+    }
+
+    // Captured before the save loop overwrites it. Only a real change is worth
+    // bouncing cava for -- see the restart below.
+    const meterRateChanged = data.hasOwnProperty('meter_framerate') &&
+        parseInt(data.meter_framerate, 10) !== parseInt(self.config.get('meter_framerate', 60), 10);
 
     self.logger.info('RetroTuner UI - saving settings');
 
@@ -375,6 +432,24 @@ retrotunerui.prototype.saveOptions = function (data) {
                 }
             ]
         });
+    }
+
+    // cava has to be bounced for a new framerate to take effect, and onRestart
+    // deliberately never touches it: cava is the only reader of the audio tap,
+    // and an unread fifo fills its 64kB buffer in ~0.37s, at which point ALSA
+    // blocks and playback stops. An explicit restart closes that gap far faster
+    // than the service's own RestartSec, so this is usually inaudible -- but the
+    // risk is real, which is why it is gated on the rate actually changing
+    // rather than running on every settings save.
+    if (meterRateChanged && !rebootPending) {
+        const newRate = parseInt(self.config.get('meter_framerate', 60), 10);
+        if (self.writeCavaFramerate(newRate)) {
+            self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
+                'Restarting the audio analyser at ' + newRate + ' fps. Playback may skip briefly.');
+            self.cavaServiceCmds('try-restart').fail(function (e) {
+                self.logger.error('RetroTuner UI - could not restart cava: ' + e);
+            });
+        }
     }
 
     const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
@@ -797,7 +872,10 @@ retrotunerui.prototype._checkButtonConflicts = function () {
 retrotunerui.prototype.systemctl = function (cmd, unit) {
     var self = this;
 
-    if (!['start', 'stop', 'restart'].includes(cmd)) {
+    // try-restart bounces a unit only if it is already running. That is what a
+    // cava framerate change wants: never start the analyser on a box where the
+    // audio tap was never installed and it has nothing to read.
+    if (!['start', 'stop', 'restart', 'try-restart'].includes(cmd)) {
         return libQ.reject(new TypeError('Unknown systemd command: ' + cmd));
     }
 

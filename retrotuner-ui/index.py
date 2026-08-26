@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from includes import api, controls, menu_manager, volumio
+from includes import api, controls, level_meter, menu_manager, volumio
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json")
@@ -117,6 +117,9 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     rot_enc_A = parse_int_field(config_data, "rot_enc_A")
     rot_enc_B = parse_int_field(config_data, "rot_enc_B")
     rotary_skip_track = parse_optional_bool_field(config_data, "rotary_skip_track", False)
+    # Half of one setting: index.js rewrites cava's framerate to match on save.
+    meter_frame_rate = parse_optional_int_field(
+        config_data, "meter_framerate", level_meter.FRAMES_PER_SECOND)
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -159,6 +162,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         control_queue, volumio_queue, menu_manager_queue,
         lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
         rotary_skip_track=rotary_skip_track,
+        meter_frame_rate=meter_frame_rate,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 

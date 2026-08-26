@@ -23,7 +23,7 @@ _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
-from .level_meter import LevelMeter
+from .level_meter import FRAMES_PER_SECOND, LevelMeter
 
 # Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
 # mirrors the "+" prefix build_menu puts on folders.
@@ -35,7 +35,8 @@ PLAY_ALL_LABEL = '> Play All'
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""
 
-    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False):
+    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False,
+                 meter_frame_rate: int = FRAMES_PER_SECOND):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
@@ -67,6 +68,10 @@ class MenuManager:
         # on screen -- see build_menu, _render_menu and show_track_info.
         self._nav_mode = True
 
+        # How fast the level meter redraws. Set from the plugin settings, which
+        # also rewrite cava's own framerate -- the two are halves of one setting.
+        self._meter_frame_rate = meter_frame_rate
+
         # Hidden beta feature; built lazily so it costs nothing until used.
         self._level_meter = None
 
@@ -95,7 +100,8 @@ class MenuManager:
 
         # cava owns the audio tap and does the analysis; this only draws what it
         # publishes, so nothing here can affect playback.
-        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu,
+                                       frame_rate=self._meter_frame_rate)
 
         # render main menu
         self.volumioQ.put({'button': 'menu'})
@@ -264,7 +270,8 @@ class MenuManager:
         rendering is paused -- see _meter_active.
         """
         if self._level_meter is None:      # not reached once run() has started
-            self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+            self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu,
+                                           frame_rate=self._meter_frame_rate)
 
         if self._level_meter.running:
             self._level_meter.stop()

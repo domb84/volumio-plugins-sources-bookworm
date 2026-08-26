@@ -11,6 +11,8 @@ from includes.level_meter import (
     FRAMES_PER_SECOND,
     LCD_COLUMNS,
     MAX_LEVEL,
+    SUPPORTED_FRAME_RATES,
+    frame_interval,
     LevelMeter,
     bar_bitmaps,
     parse_bars,
@@ -222,12 +224,16 @@ class TestQuietStart:
 
 
 class TestFrameRateMatchesCava:
-    """Our draw interval and cava's framerate are two halves of one setting.
+    """Our draw rate and cava's framerate are two halves of one setting.
 
     cava caps how many distinct frames exist; FRAME_INTERVAL caps how often we
     draw one. If they drift apart the display either redraws frames it has
     already shown or throws away frames cava computed -- neither is visible as a
     failure, it just quietly wastes one side or the other.
+
+    The settings page rewrites both together, so what is pinned here is that the
+    two shipped defaults agree: a fresh install runs on these until someone
+    opens the settings page, and nothing else would catch them diverging.
     """
 
     def _cava_framerate(self):
@@ -245,3 +251,38 @@ class TestFrameRateMatchesCava:
 
     def test_the_interval_is_the_reciprocal_of_the_rate(self):
         assert FRAME_INTERVAL == 1.0 / FRAMES_PER_SECOND
+
+
+class TestConfigurableFrameRate:
+    """The draw rate comes from the plugin settings, so it must survive whatever
+    a hand-edited or outdated config file contains."""
+
+    def test_a_supported_rate_sets_the_interval(self):
+        for rate in SUPPORTED_FRAME_RATES:
+            assert frame_interval(rate) == 1.0 / rate
+
+    def test_the_default_is_one_of_the_offered_rates(self):
+        assert FRAMES_PER_SECOND in SUPPORTED_FRAME_RATES
+
+    def test_a_string_from_the_config_file_still_works(self):
+        # config.json stores numbers as strings ("value": "60").
+        assert frame_interval("30") == 1.0 / 30
+
+    def test_zero_falls_back_rather_than_dividing_by_zero(self):
+        assert frame_interval(0) == FRAME_INTERVAL
+
+    def test_a_negative_rate_falls_back(self):
+        # Otherwise the draw loop never waits and spins flat out on the display.
+        assert frame_interval(-10) == FRAME_INTERVAL
+
+    def test_nonsense_falls_back(self):
+        assert frame_interval("fast") == FRAME_INTERVAL
+        assert frame_interval(None) == FRAME_INTERVAL
+
+    def test_the_meter_uses_the_rate_it_was_given(self):
+        meter = LevelMeter(Mock(), bars_path='/nonexistent', frame_rate=15)
+        assert meter._frame_interval == 1.0 / 15
+
+    def test_the_meter_defaults_to_the_shipped_rate(self):
+        meter = LevelMeter(Mock(), bars_path='/nonexistent')
+        assert meter._frame_interval == FRAME_INTERVAL

@@ -52,10 +52,50 @@ READ_CHUNK = 4096
 # something other than cava writing) growing the buffer forever.
 MAX_PENDING = 64 * 1024
 
-# Must match "framerate" in cava/retrotuner-cava.conf -- see the note there.
+# Default draw rate. Must match "framerate" in cava/retrotuner-cava.conf, which
+# ships with the same value -- see the note there. Both are overridden together
+# from the plugin settings: index.js rewrites the cava config and index.py
+# passes the rate down here, so nothing reads these two once configured.
 FRAMES_PER_SECOND = 60
 FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
-SILENCE_TIMEOUT = 2.0          # after this long with every bar at zero, say so
+
+# Offered in the settings UI. A doubling series across the useful range: 15 is
+# the escape hatch if the meter ever competes with button polling, 120 is close
+# to what the display can be driven at -- a frame takes ~2.7ms to write, so 120
+# already spends a third of wall time mid-render for no more detail than 60
+# gives on a 16-step bar.
+SUPPORTED_FRAME_RATES = (15, 30, 60, 120)
+# How long every bar must sit at zero before the display says so. Measured from
+# the last frame with any signal in it, so what you actually see is longer than
+# this: cava's bars fall gradually rather than cutting out, and those few seconds
+# of decay count as sound. At 2.0 the notice appeared after roughly five seconds
+# of quiet; expect this to read as about thirteen.
+#
+# Erring long is deliberate. Between tracks, during a quiet passage, or while a
+# stream rebuffers, the audio really has stopped -- but saying "NO AUDIO" and
+# then snapping back to bars a moment later is worse than simply showing an
+# empty meter for a while.
+SILENCE_TIMEOUT = 10.0
+
+
+def frame_interval(frame_rate):
+    """Seconds per frame for ``frame_rate``, falling back to the default.
+
+    Deliberately tolerant. The rate arrives from a settings file that can be
+    hand-edited or left behind by an older version, and a bad value here would
+    either divide by zero or spin the draw loop flat out against the display --
+    neither is worth crashing the meter over, let alone taking down the thread
+    that also owns the menu.
+    """
+    try:
+        rate = int(frame_rate)
+    except (TypeError, ValueError):
+        rate = 0
+    if rate <= 0:
+        logger.warning("Ignoring invalid frame rate %r; using %d fps",
+                       frame_rate, FRAMES_PER_SECOND)
+        rate = FRAMES_PER_SECOND
+    return 1.0 / rate
 
 
 def bar_bitmaps():
@@ -127,10 +167,12 @@ class LevelMeter:
     effect on playback.
     """
 
-    def __init__(self, menu, bars_path=DEFAULT_BARS_PATH, on_stop=None):
+    def __init__(self, menu, bars_path=DEFAULT_BARS_PATH, on_stop=None,
+                 frame_rate=FRAMES_PER_SECOND):
         self._menu = menu
         self._bars_path = bars_path
         self._on_stop = on_stop
+        self._frame_interval = frame_interval(frame_rate)
         self._thread = None
         self._stop = threading.Event()
         self._glyphs_loaded = False
@@ -250,7 +292,7 @@ class LevelMeter:
                     showing_silence = False
                     self._menu.render_frame(render_columns(levels))
 
-                remaining = FRAME_INTERVAL - (time.monotonic() - started)
+                remaining = self._frame_interval - (time.monotonic() - started)
                 if remaining > 0:
                     self._stop.wait(remaining)
         except Exception as e:
