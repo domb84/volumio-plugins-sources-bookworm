@@ -180,3 +180,79 @@ class TestMeterFrameRateSettings:
         section, _field = self._ui_field()
         assert "meter_framerate" in section["saveButton"]["data"]
         assert section["onSave"]["method"] == "saveOptions"
+
+
+class TestMeterStereoSetting:
+    """Stereo mode is purely a cava setting -- it still emits 16 bars, so nothing
+    on the python side changes. What has to hold is that index.js can find the
+    key to rewrite, and that it rewrites the right one."""
+
+    def _plugin_dir(self):
+        import os
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _cava_sections(self):
+        """{section: {key: value}} for the shipped cava config."""
+        import io
+        import os
+        sections = {}
+        current = None
+        path = os.path.join(self._plugin_dir(), "cava", "retrotuner-cava.conf")
+        with io.open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith((";", "#")):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    current = line[1:-1].strip()
+                    sections[current] = {}
+                elif "=" in line and current is not None:
+                    key, _, value = line.partition("=")
+                    sections[current][key.strip()] = value.strip()
+        return sections
+
+    def _load_json(self, name):
+        import io
+        import os
+        with io.open(os.path.join(self._plugin_dir(), name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_channels_appears_in_both_cava_sections(self):
+        # The whole reason index.js edits this file by section: a plain line
+        # match on "channels" would hit [input] first and rewrite the tap's
+        # channel count with "mono", breaking the analyser's view of the audio.
+        sections = self._cava_sections()
+        assert "channels" in sections["input"]
+        assert "channels" in sections["output"]
+
+    def test_input_channels_is_a_count_and_output_is_a_mode(self):
+        sections = self._cava_sections()
+        assert sections["input"]["channels"].isdigit()
+        assert sections["output"]["channels"] in ("mono", "stereo")
+
+    def test_framerate_is_under_general(self):
+        # index.js looks for it there specifically.
+        sections = self._cava_sections()
+        assert "framerate" in sections["general"]
+
+    def test_config_default_is_mono(self):
+        # Matches the shipped cava config, so a fresh install is self-consistent
+        # before anyone opens the settings page.
+        stereo = self._load_json("config.json")["meter_stereo"]["value"]
+        assert stereo is False
+        assert self._cava_sections()["output"]["channels"] == "mono"
+
+    def test_the_switch_exists_and_is_saved(self):
+        ui = self._load_json("UIConfig.json")
+        section = next(s for s in ui["sections"] if s["id"] == "level_meter")
+        field = next(c for c in section["content"] if c["id"] == "meter_stereo")
+        assert field["element"] == "switch"
+        assert "meter_stereo" in section["saveButton"]["data"]
+
+    def test_it_is_a_switch_not_a_select(self):
+        # saveOptions' isValid() only accepts numbers and booleans, so a select
+        # posting "stereo" as a string would be rejected and silently not saved.
+        ui = self._load_json("UIConfig.json")
+        section = next(s for s in ui["sections"] if s["id"] == "level_meter")
+        field = next(c for c in section["content"] if c["id"] == "meter_stereo")
+        assert isinstance(field["value"], bool)

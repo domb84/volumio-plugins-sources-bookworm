@@ -92,25 +92,68 @@ var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 // carries the notes explaining why each key is what it is.
 var CAVA_CONF = 'cava/retrotuner-cava.conf';
 
-retrotunerui.prototype.writeCavaFramerate = function (rate) {
+// Replace one key inside one [section] of an ini file, returning null if the key
+// was not found there.
+//
+// Section-aware on purpose: "channels" appears twice in cava's config -- once as
+// [input] channels = 2, the tap's channel count, and once as [output] channels =
+// mono|stereo, the display mode. A plain line match would rewrite the input one
+// and break the analyser's view of the audio entirely.
+function replaceInIniSection(contents, sectionName, key, value) {
+    const lines = contents.split('\n');
+    const keyLine = new RegExp('^\\s*' + key + '\\s*=');
+    let inSection = false;
+    let replaced = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        const header = lines[i].match(/^\s*\[([^\]]+)\]/);
+        if (header) {
+            inSection = header[1].trim() === sectionName;
+            continue;
+        }
+        if (inSection && keyLine.test(lines[i])) {
+            lines[i] = key + ' = ' + value;
+            replaced = true;
+        }
+    }
+
+    return replaced ? lines.join('\n') : null;
+}
+
+// Push the meter settings into cava's config. Both are written together because
+// both are only read when cava starts, so they share one restart.
+retrotunerui.prototype.applyCavaSettings = function () {
     const self = this;
     const conf = __dirname + '/' + CAVA_CONF;
 
+    const rate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
+    const channels = Boolean(self.config.get('meter_stereo', false)) ? 'stereo' : 'mono';
+    const wanted = [
+        ['general', 'framerate', rate],
+        ['output', 'channels', channels]
+    ];
+
     try {
-        const contents = fs.readFileSync(conf, 'utf8');
-        const updated = contents.replace(/^framerate\s*=.*$/m, 'framerate = ' + rate);
-        if (updated === contents) {
-            // No match means the key was renamed or removed. Saying so is the
-            // point: cava would silently keep its old rate and the meter would
-            // run at a different one from the analyser.
-            self.logger.error('RetroTuner UI - no framerate line in ' + conf + '; cava rate unchanged');
-            return false;
+        let contents = fs.readFileSync(conf, 'utf8');
+
+        for (const [section, key, value] of wanted) {
+            const updated = replaceInIniSection(contents, section, key, value);
+            if (updated === null) {
+                // The key was renamed or removed. Saying so is the point: cava
+                // would silently keep its old value and the analyser would run
+                // differently from what the settings page claims.
+                self.logger.error('RetroTuner UI - no ' + key + ' under [' + section + '] in ' +
+                    conf + '; cava settings unchanged');
+                return false;
+            }
+            contents = updated;
         }
-        fs.writeFileSync(conf, updated, 'utf8');
-        self.logger.info('RetroTuner UI - cava framerate set to ' + rate);
+
+        fs.writeFileSync(conf, contents, 'utf8');
+        self.logger.info('RetroTuner UI - cava set to ' + rate + ' fps, ' + channels);
         return true;
     } catch (e) {
-        self.logger.error('RetroTuner UI - could not write cava framerate: ' + e);
+        self.logger.error('RetroTuner UI - could not write cava settings: ' + e);
         return false;
     }
 };
@@ -184,7 +227,7 @@ retrotunerui.prototype.onStart = function() {
     // it here or the two silently diverge: cava analysing at one rate and the
     // meter drawing at another, with nothing to report the mismatch.
     if (tapEnabled) {
-        self.writeCavaFramerate(parseInt(self.config.get('meter_framerate', 60), 10) || 60);
+        self.applyCavaSettings();
     }
 
     // Start pigpiod first (the python controls connect to it), then our service.
@@ -294,6 +337,7 @@ retrotunerui.prototype.getUIConfig = function() {
             const meterRate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
             setValue(section('level_meter'), 'meter_framerate',
                      { value: meterRate, label: meterRate + ' fps' });
+            setValue(section('level_meter'), 'meter_stereo', self.config.get('meter_stereo', false));
 
             // Also new -- default matches apply_log_level()'s own fallback in index.py.
             setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
@@ -362,10 +406,13 @@ retrotunerui.prototype.saveOptions = function (data) {
         data.meter_framerate = data.meter_framerate.value;
     }
 
-    // Captured before the save loop overwrites it. Only a real change is worth
+    // Captured before the save loop overwrites them. Only a real change is worth
     // bouncing cava for -- see the restart below.
     const meterRateChanged = data.hasOwnProperty('meter_framerate') &&
         parseInt(data.meter_framerate, 10) !== parseInt(self.config.get('meter_framerate', 60), 10);
+    const meterStereoChanged = data.hasOwnProperty('meter_stereo') &&
+        Boolean(data.meter_stereo) !== Boolean(self.config.get('meter_stereo', false));
+    const meterChanged = meterRateChanged || meterStereoChanged;
 
     self.logger.info('RetroTuner UI - saving settings');
 
@@ -441,11 +488,10 @@ retrotunerui.prototype.saveOptions = function (data) {
     // than the service's own RestartSec, so this is usually inaudible -- but the
     // risk is real, which is why it is gated on the rate actually changing
     // rather than running on every settings save.
-    if (meterRateChanged && !rebootPending) {
-        const newRate = parseInt(self.config.get('meter_framerate', 60), 10);
-        if (self.writeCavaFramerate(newRate)) {
+    if (meterChanged && !rebootPending) {
+        if (self.applyCavaSettings()) {
             self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
-                'Restarting the audio analyser at ' + newRate + ' fps. Playback may skip briefly.');
+                'Restarting the audio analyser. Playback may skip briefly.');
             self.cavaServiceCmds('try-restart').fail(function (e) {
                 self.logger.error('RetroTuner UI - could not restart cava: ' + e);
             });

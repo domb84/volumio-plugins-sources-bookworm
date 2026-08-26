@@ -139,6 +139,10 @@
         "type": "number",
         "value": "60"
     },
+    "meter_stereo": {
+        "type": "boolean",
+        "value": false
+    },
     "debug_mode": {
         "type": "boolean",
         "value": false
