@@ -170,3 +170,33 @@ class TestMeterCannotAffectAudio:
         meter = LevelMeter(Mock(), bars_path='/nonexistent')
         assert not hasattr(meter, 'start_drain')
         assert not hasattr(meter, '_record_peak')
+
+
+class TestModuleIsSelfConsistent:
+    """Catch names used in _run() that are not actually imported.
+
+    _run() only executes on the device, so a missing import there survives the
+    rest of the suite untouched and surfaces as a silent "Level meter stopped on
+    error" -- which is exactly how `select` went missing once already.
+    """
+
+    def test_modules_used_as_x_dot_y_are_imported(self):
+        import ast
+        from includes import level_meter
+
+        tree = ast.parse(open(level_meter.__file__, encoding='utf8').read())
+
+        # Bases of attribute access -- the "select" in select.select(...).
+        bases = {n.value.id for n in ast.walk(tree)
+                 if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+        # Anything bound locally (assignment, parameter, except-as) is not a
+        # module reference, so exclude it.
+        bound = {n.id for n in ast.walk(tree)
+                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        bound |= {a.arg for a in ast.walk(tree) if isinstance(a, ast.arg)}
+        bound |= {h.name for h in ast.walk(tree)
+                  if isinstance(h, ast.ExceptHandler) and h.name}
+
+        missing = sorted(b for b in bases - bound - {'self'}
+                         if b not in vars(level_meter))
+        assert not missing, "used but never imported: %s" % missing

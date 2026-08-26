@@ -23,6 +23,7 @@ because all 16 columns share the same glyph set.
 """
 import logging
 import os
+import select
 import threading
 import time
 
@@ -44,6 +45,12 @@ MAX_LEVEL = CELL_ROWS * LCD_ROWS
 # cava's raw ascii output: one line per frame, values separated by ";".
 DEFAULT_BARS_PATH = "/tmp/retrotuner-bars"
 BAR_SEPARATOR = ';'
+
+# One frame is ~50 bytes, so this holds a healthy backlog without a big read.
+READ_CHUNK = 4096
+# Guard against a stream that never contains a newline (wrong output format, or
+# something other than cava writing) growing the buffer forever.
+MAX_PENDING = 64 * 1024
 
 FRAME_INTERVAL = 0.05          # matches cava's framerate; 20fps
 SILENCE_TIMEOUT = 2.0          # after this long with every bar at zero, say so
@@ -173,31 +180,48 @@ class LevelMeter:
         self._glyphs_loaded = True
 
     def _run(self):
-        handle = None
+        fd = None
+        pending = b''
         last_sound = time.monotonic()
         try:
             self._load_glyphs()
             # Non-blocking: cava may not have opened its end yet, and a blocking
             # open would hang the button press until it did.
+            #
+            # Read the raw descriptor rather than wrapping it in a file object:
+            # a non-blocking stream returns None when no data is ready, which
+            # TextIOWrapper.readline() cannot represent -- it raises or returns
+            # "" for "nothing yet", indistinguishable from end of stream.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
-            handle = os.fdopen(fd, 'r', buffering=1, errors='replace')
 
             while not self._stop.is_set():
                 started = time.monotonic()
 
-                # Drain to the newest complete line: cava writes faster than the
-                # display can keep up, and showing a stale frame is worse than
-                # skipping to the current one.
-                latest = None
-                while True:
+                ready, _, _ = select.select([fd], [], [], 0)
+                if ready:
                     try:
-                        line = handle.readline()
+                        chunk = os.read(fd, READ_CHUNK)
                     except (BlockingIOError, InterruptedError):
-                        break
-                    if not line:
-                        break
-                    if line.endswith('\n'):
-                        latest = line
+                        chunk = b''
+                    if chunk:
+                        pending += chunk
+
+                # cava writes faster than the display can be redrawn, so take
+                # the newest complete line and discard the backlog; showing a
+                # stale frame is worse than skipping to the current one.
+                latest = None
+                if b'\n' in pending:
+                    parts = pending.split(b'\n')
+                    pending = parts[-1]          # keep the partial tail
+                    for line in reversed(parts[:-1]):
+                        if line.strip():
+                            latest = line.decode('ascii', 'replace')
+                            break
+
+                # A stream with no newline is either not cava or badly broken;
+                # don't let the buffer grow without bound waiting for one.
+                if len(pending) > MAX_PENDING:
+                    pending = b''
 
                 if latest is not None:
                     levels = parse_bars(latest)
@@ -215,9 +239,9 @@ class LevelMeter:
         except Exception as e:
             logger.error("Level meter stopped on error: %s", e)
         finally:
-            if handle is not None:
+            if fd is not None:
                 try:
-                    handle.close()
+                    os.close(fd)
                 except Exception:
                     pass
             if self._on_stop is not None:
