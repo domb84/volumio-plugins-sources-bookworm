@@ -528,3 +528,58 @@ class TestPlayRoutesByService:
         v = self._volumio()
         v.play('somescheme://whatever')
         v._send.assert_not_called()
+
+
+class TestPlayCarriesTheTitle:
+    """The queue item must arrive named, or nothing shows as playing anywhere.
+
+    CorePlayQueue.addQueueItems hands the whole payload to the owning service's
+    explodeUri. For a plain stream URL webradio's implementation is a
+    pass-through:
+
+        if (data.title) { data.name = data.title }
+        defer.resolve(data)
+
+    -- no lookup at all. Send no title and the item enters the queue unnamed,
+    and since CoreStateMachine builds its state from the queue item rather than
+    from MPD, both the web UI and the info button show nothing while the audio
+    plays perfectly. The web UI is unaffected because it posts the entire browse
+    item; the front panel has the title too and used to drop it.
+    """
+
+    STREAM = 'http://host/stream.m3u8'
+
+    def _volumio(self):
+        v = Volumio.__new__(Volumio)
+        v._send = Mock()
+        return v
+
+    def test_title_is_sent_when_the_item_has_one(self):
+        v = self._volumio()
+        v.play(self.STREAM, 'webradio', 'BBC 6 Indie Forever')
+        assert v._send.call_args[0][1]['title'] == 'BBC 6 Indie Forever'
+
+    def test_title_travels_from_the_queue_item(self):
+        v = self._volumio()
+        v._process_queue_item({'button': self.STREAM, 'service': 'webradio',
+                               'title': 'BBC 6 Indie Forever'})
+        v._send.assert_called_once_with(
+            'addPlay', {'status': 'play', 'service': 'webradio',
+                        'uri': self.STREAM, 'title': 'BBC 6 Indie Forever'})
+
+    def test_no_empty_title_key_is_sent(self):
+        # explodeUri gates on truthiness -- "if (data.title)" -- so an empty
+        # string is no better than omitting it, and sending one would only make
+        # the payload look correct while the item still arrives unnamed.
+        for missing in (None, ''):
+            v = self._volumio()
+            v.play(self.STREAM, 'webradio', missing)
+            assert 'title' not in v._send.call_args[0][1]
+
+    def test_an_item_without_a_title_still_plays(self):
+        # Losing the name is bad; losing playback is worse.
+        v = self._volumio()
+        v.play(self.STREAM, 'webradio')
+        v._send.assert_called_once_with(
+            'addPlay', {'status': 'play', 'service': 'webradio',
+                        'uri': self.STREAM})

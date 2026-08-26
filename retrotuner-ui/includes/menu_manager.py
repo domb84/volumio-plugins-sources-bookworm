@@ -602,7 +602,11 @@ class MenuManager:
         # The owning service travels with the item. Volumio routes addPlay by
         # service name, and guessing it from the URI later gets it wrong (the
         # Spotify plugin registers as "spop", not "spotify").
-        self.volumioQ.put({'button': button_link, 'service': button_service})
+        # The title travels with the item for the same reason the service does:
+        # Volumio's queue keeps whatever we send verbatim, and an item without a
+        # name shows as nothing playing everywhere -- VFD and web UI alike.
+        self.volumioQ.put({'button': button_link, 'service': button_service,
+                           'title': button_name.lstrip('+')})
 
 
     def dimmer(self):
