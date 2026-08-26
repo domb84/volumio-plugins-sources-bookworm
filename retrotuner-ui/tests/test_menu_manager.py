@@ -225,3 +225,82 @@ class TestMenuRevertUsesRenderMenu:
         m = _display_manager()
         m.show_message(json.dumps([{'message': 'No media is playing'}]))
         m._schedule_deferred.assert_called_once_with(m._render_menu)
+
+
+class TestIdleFallsBackToTheMeter:
+    """30s after the last control input the display rests on the level meter --
+    but only while something is actually playing. Paused or stopped there is
+    nothing to draw, so it asks for the state and shows the track or the menu."""
+
+    def _manager(self, playing, meter_running=False, starts=True):
+        m = _bare_manager()
+        m.volumioQ = queue.Queue()
+        m._playing = playing
+        m._meter_auto = False
+        m._idle_timer = Mock()
+        m._level_meter = Mock()
+        m._level_meter.running = meter_running
+        m._level_meter.start.return_value = starts
+        return m
+
+    def test_playing_starts_the_meter_instead_of_asking_for_info(self):
+        m = self._manager(playing=True)
+        m._on_menu_idle()
+        m._level_meter.start.assert_called_once_with(announce=False)
+        assert m._meter_auto is True
+        assert m.volumioQ.empty()
+
+    def test_paused_or_stopped_asks_for_info_and_leaves_the_meter_alone(self):
+        m = self._manager(playing=False)
+        m._on_menu_idle()
+        m._level_meter.start.assert_not_called()
+        assert m._meter_auto is False
+        assert m.volumioQ.get_nowait() == {'show': 'info'}
+
+    def test_a_meter_that_will_not_start_falls_back_to_info(self):
+        # cava down: the meter refuses, so the idle screen is the track, not a
+        # blank display.
+        m = self._manager(playing=True, starts=False)
+        m._on_menu_idle()
+        assert m._meter_auto is False
+        assert m.volumioQ.get_nowait() == {'show': 'info'}
+
+    def test_an_already_running_meter_is_not_restarted(self):
+        m = self._manager(playing=True, meter_running=True)
+        m._on_menu_idle()
+        m._level_meter.start.assert_not_called()
+
+    def test_nothing_is_rearmed_so_the_meter_is_the_resting_state(self):
+        m = self._manager(playing=True)
+        m._on_menu_idle()
+        assert m._idle_timer is None
+
+
+class TestPlayingUpdatesDismissTheIdleMeter:
+    """Pausing from the web UI fires no control, so the only thing that can get
+    an idle meter off the screen is the play-state push."""
+
+    def _manager(self, meter_auto):
+        m = _bare_manager()
+        m.volumioQ = queue.Queue()
+        m._playing = True
+        m._meter_auto = meter_auto
+        m._level_meter = Mock()
+        m._level_meter.running = True
+        return m
+
+    def test_stopping_dismisses_an_idle_meter_and_asks_what_is_playing(self):
+        m = self._manager(meter_auto=True)
+        m._stop_auto_meter()
+        m._level_meter.stop.assert_called_once()
+        assert m._meter_auto is False
+        # Paused renders the track with "||"; a genuine stop has no title and
+        # comes back as the "no media" toast, which reverts to the menu.
+        assert m.volumioQ.get_nowait() == {'show': 'info'}
+
+    def test_a_meter_the_user_asked_for_survives_the_music_stopping(self):
+        m = self._manager(meter_auto=False)
+        m._playing = False
+        # _meter_auto is False, so the queue loop never calls _stop_auto_meter.
+        m._level_meter.stop.assert_not_called()
+        assert m._level_meter.running is True

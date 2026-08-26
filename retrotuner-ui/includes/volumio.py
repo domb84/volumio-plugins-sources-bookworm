@@ -66,6 +66,7 @@ class Volumio:
         self._pending_info_timer = None
         self._pending_info_lock = threading.Lock()
         self._force_next_state = False  # next pushState was explicitly requested (info button)
+        self._last_playing = None       # last play/not-play we told the menu manager about
         self._last_browse_uri = None    # uri of the list currently on screen (for post-removal refresh)
         self._refresh_browse = False    # next pushBrowseLibrary replaces the menu without history
         self._refresh_timer = None      # pending post-removal refresh timer
@@ -432,6 +433,22 @@ class Volumio:
 
             # normalise empty strings to None so downstream only has to check for None
             clean_state = {k: (None if v == "" else v) for k, v in clean_state.items()}
+
+            # Tell the menu manager whether audio is actually playing, so its
+            # idle timeout can pick between the level meter and the now-playing
+            # screen. Kept here rather than inferred from the info payloads
+            # because a stop is reported down the "no media" branch below, which
+            # never reaches show_track_info -- the menu manager would never learn
+            # that playback had ended.
+            #
+            # Only on change: a radio station re-pushes the same state every few
+            # seconds and this would otherwise be pure queue traffic. Note pause
+            # counts as not playing, which is what we want: the meter should get
+            # out of the way rather than sit there showing silence.
+            playing = status == 'play'
+            if playing != self._last_playing:
+                self._last_playing = playing
+                self.menuManagerQ.put({'playing': playing})
 
             # nothing is playing if neither artist nor title is set
             all_none = clean_state['artist'] is None and clean_state['title'] is None

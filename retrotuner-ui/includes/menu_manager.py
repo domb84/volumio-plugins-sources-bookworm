@@ -70,6 +70,15 @@ class MenuManager:
         # Hidden beta feature; built lazily so it costs nothing until used.
         self._level_meter = None
 
+        # Whether audio is playing, pushed by the Volumio worker on change. The
+        # idle timeout uses it to decide between the meter and the now-playing
+        # screen; pause and stop both count as not playing.
+        self._playing = False
+        # True only while the meter is up because the display went idle. A meter
+        # the user asked for by long-pressing the dimmer stays until they dismiss
+        # it, even if the music stops.
+        self._meter_auto = False
+
     def run(self):
         """Claim the display and service the queues until stopped. Thread entry point.
 
@@ -135,6 +144,7 @@ class MenuManager:
                         # than its own toggle means the user wants the menu back.
                         if action != 'btn_dimmer_long' and self._meter_active():
                             self._level_meter.stop()
+                            self._meter_auto = False
                         self.menuAccessTime = datetime.now()
                         if self._suppressed_info is not None:
                             self._defer_info(self._suppressed_info)
@@ -174,6 +184,14 @@ class MenuManager:
                     self.show_message(queueItem['message'],
                                       force=queueItem.get('force', False),
                                       persist=queueItem.get('persist', False))
+                elif 'playing' in queueItem:
+                    self._playing = queueItem['playing']
+                    if not self._playing and self._meter_auto:
+                        # Paused or stopped. An idle meter has nothing left to
+                        # draw, so get it off the screen and ask what state we
+                        # are in: paused shows the track, stopped falls back to
+                        # the menu via the "no media" toast.
+                        self._stop_auto_meter()
                 elif 'clear' in queueItem:
                     self.display_message("", clear=True)
                 else:
@@ -250,8 +268,12 @@ class MenuManager:
 
         if self._level_meter.running:
             self._level_meter.stop()
+            self._meter_auto = False
             logger.info("Level meter off")
         elif self._level_meter.start():
+            # Asked for explicitly, so it outlives the music: stopping playback
+            # won't dismiss it the way it dismisses an idle one.
+            self._meter_auto = False
             logger.info("Level meter on")
 
     def _meter_active(self) -> bool:
@@ -380,7 +402,40 @@ class MenuManager:
         self._idle_timer.start()
 
     def _on_menu_idle(self) -> None:
+        """Fall back to a resting display 30s after the last control input.
+
+        While something is playing that is the level meter -- on a tuner front
+        panel the spectrum is what should be sitting there when nobody is
+        looking, and the track is still one press of INFO away. Paused or
+        stopped there is nothing to draw, so we ask for the state instead and
+        get the track or the menu.
+
+        Nothing is re-armed here: the meter is the resting state, and the next
+        control press both dismisses it and starts the timer again.
+        """
         self._idle_timer = None
+
+        if self._playing and self._level_meter is not None and not self._meter_active():
+            # Quiet: nobody asked for the meter, so a missing cava must not put
+            # an error over whatever is currently on screen.
+            if self._level_meter.start(announce=False):
+                self._meter_auto = True
+                logger.info("Level meter on (idle)")
+                return
+
+        self.volumioQ.put({'show': 'info'})
+
+    def _stop_auto_meter(self) -> None:
+        """Dismiss an idle-started meter and show what's playing instead.
+
+        stop() re-renders the menu through its on_stop hook, so the info request
+        is what actually decides the screen: a paused track renders with "||",
+        while a genuine stop has no title and comes back as "No media is
+        playing", which reverts to the menu on its own.
+        """
+        self._meter_auto = False
+        if self._meter_active():
+            self._level_meter.stop()
         self.volumioQ.put({'show': 'info'})
 
     def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):

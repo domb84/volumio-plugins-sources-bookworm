@@ -200,3 +200,20 @@ class TestModuleIsSelfConsistent:
         missing = sorted(b for b in bases - bound - {'self'}
                          if b not in vars(level_meter))
         assert not missing, "used but never imported: %s" % missing
+
+
+class TestQuietStart:
+    """The idle timeout starts the meter without being asked, so a failure to
+    start must not paint over whatever the user was last looking at."""
+
+    def test_an_unrequested_start_stays_silent(self):
+        menu = Mock()
+        meter = LevelMeter(menu, bars_path='/nonexistent')
+        assert meter.start(announce=False) is False
+        menu.message.assert_not_called()
+
+    def test_a_requested_start_still_explains_itself(self):
+        menu = Mock()
+        meter = LevelMeter(menu, bars_path='/nonexistent')
+        assert meter.start() is False
+        menu.message.assert_called_once()

@@ -137,13 +137,21 @@ class LevelMeter:
     def running(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self):
+    def start(self, announce=True):
+        """Start drawing. Returns True if the thread was started.
+
+        ``announce=False`` keeps a failed start silent. The idle timeout starts
+        the meter without being asked, so if cava happens to be down it must not
+        paint an error over whatever the user was last looking at -- a button
+        press, which did ask, still says why nothing happened.
+        """
         if self.running:
             return False
         if not self._bars_available():
             logger.warning("No cava output at %s; is retrotuner-cava running?",
                            self._bars_path)
-            self._menu.message("NO ANALYSER".ljust(LCD_COLUMNS))
+            if announce:
+                self._menu.message("NO ANALYSER".ljust(LCD_COLUMNS))
             return False
 
         self._stop.clear()
