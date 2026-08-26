@@ -207,6 +207,7 @@ def _display_manager():
     m.lastMessageTime = datetime.now() - timedelta(seconds=10)
     m._pending_render_timer = None
     m._schedule_deferred = Mock()
+    m._level_meter = None      # hidden beta feature; off unless started
     return m
 
 

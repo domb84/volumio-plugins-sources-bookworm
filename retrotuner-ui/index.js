@@ -3,6 +3,7 @@
 var libQ = require('kew');
 var fs = require('fs-extra');
 var exec = require('child_process').exec;
+var execSync = require('child_process').execSync;
 
 // Dropped just before a self-triggered restart so the python service can tell a
 // restart (capture/settings save) apart from a genuine stop/shutdown.
@@ -42,12 +43,8 @@ retrotunerui.prototype.ensureSpiInUserConfig = function () {
 
     // A file with no trailing newline would otherwise glue our line onto
     // whatever came last, silently breaking both settings.
-    if (contents.length > 0 && !contents.endsWith('
-')) { contents += '
-'; }
-    contents += SPI_USERCONFIG_COMMENT + '
-' + SPI_USERCONFIG_LINE + '
-';
+    if (contents.length > 0 && !contents.endsWith('\n')) { contents += '\n'; }
+    contents += SPI_USERCONFIG_COMMENT + '\n' + SPI_USERCONFIG_LINE + '\n';
 
     try {
         fs.writeFileSync(USERCONFIG_PATH, contents, 'utf8');
@@ -82,8 +79,67 @@ retrotunerui.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
+// Audio tap for the hidden level meter. cava reads this fifo and publishes the
+// analysed bars; the python service only draws them. Gated on the asound config
+// being present so the tap is never spliced into the output chain by accident.
+var AUDIO_TAP_CONF = 'rt_in.rt_out.2.conf';
+var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
+
+retrotunerui.prototype.setupAudioTap = function () {
+    const self = this;
+    const conf = __dirname + '/asound/' + AUDIO_TAP_CONF;
+
+    if (!fs.existsSync(conf)) {
+        // Logged rather than silent: otherwise "no audio tap" on the display is
+        // indistinguishable from this code never having run at all.
+        self.logger.info('RetroTuner UI - audio tap not enabled (no ' + conf + ')');
+        return false;
+    }
+
+    // volumiofifo writes to the fifo but does not create it, so it has to exist
+    // before the ALSA config referencing it is applied (stylish_player does the
+    // same).
+    //
+    // Reuse an existing fifo rather than recreating it. This runs on every
+    // plugin start, and cava is typically already running by then -- a
+    // remove+mkfifo gives the path a new inode while cava keeps reading the old,
+    // now-unlinked one, which no writer can ever reach again. That is what made
+    // cava need restarting by hand before it would see any audio.
+    try {
+        let usable = false;
+        try {
+            usable = fs.statSync(AUDIO_TAP_FIFO).isFIFO();
+        } catch (e) {
+            usable = false;      // missing, or not stat-able
+        }
+
+        if (!usable) {
+            fs.removeSync(AUDIO_TAP_FIFO);   // a stale regular file would wedge it
+            // As the volumio user, not root: this process runs as root (see
+            // serviceCmds) and cava does not.
+            execSync('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, { uid: 1000, gid: 1000 });
+            self.logger.info('RetroTuner UI - created audio tap fifo ' + AUDIO_TAP_FIFO);
+        }
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not prepare audio tap fifo: ' + e);
+    }
+
+    // Volumio only folds plugin asound/ files into /etc/asound.conf when asked;
+    // nothing does it implicitly on plugin start.
+    try {
+        self.commandRouter.executeOnPlugin('audio_interface', 'alsa_controller', 'updateALSAConfigFile');
+        self.logger.info('RetroTuner UI - audio tap enabled (' + AUDIO_TAP_CONF + ')');
+    } catch (e) {
+        self.logger.error('RetroTuner UI - could not update the ALSA config: ' + e);
+    }
+
+    return true;
+};
+
 retrotunerui.prototype.onStart = function() {
     var self = this;
+
+    const tapEnabled = self.setupAudioTap();
 
     // SPI is on by default, so a fresh install would otherwise never add the
     // boot parameter -- no settings save ever happens. Logged rather than
@@ -95,6 +151,11 @@ retrotunerui.prototype.onStart = function() {
 
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
+        .then(function () {
+            // Only when the tap is installed: without the tap cava has nothing
+            // to read, and with the tap but no cava, playback stalls.
+            return tapEnabled ? self.cavaServiceCmds('start') : libQ.resolve();
+        })
         .then(function () { return self.retrotuneruiServiceCmds('start'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error starting: ' + e); });
 };
@@ -103,6 +164,7 @@ retrotunerui.prototype.onStop = function() {
     var self = this;
 
     return self.retrotuneruiServiceCmds('stop')
+        .then(function () { return self.cavaServiceCmds('stop'); })
         .then(function () { return self.pigpiodServiceCmds('stop'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error stopping: ' + e); });
 };
@@ -119,6 +181,11 @@ retrotunerui.prototype.onRestart = function() {
     // running daemon is left untouched — restarting it here races the controls'
     // pigpio reconnect and leaves the rotary encoder dead until the next restart.
     // Config changes never require pigpiod to restart.
+    //
+    // cava is deliberately left alone too, and for a sharper reason: it is the
+    // only reader of the audio tap, and bouncing it would leave the fifo unread
+    // long enough for ALSA to block and playback to stop. Settings saves restart
+    // this plugin routinely, so that would cut the music every time.
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
@@ -757,4 +824,11 @@ retrotunerui.prototype.retrotuneruiServiceCmds = function (cmd) {
 
 retrotunerui.prototype.pigpiodServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'pigpiod.service');
+};
+
+// cava reads the audio tap and publishes the analysed bars. It must run for as
+// long as the tap is in the ALSA chain -- not just while the meter is on screen
+// -- because an unread fifo blocks ALSA and stops playback.
+retrotunerui.prototype.cavaServiceCmds = function (cmd) {
+    return this.systemctl(cmd, 'retrotuner-cava.service');
 };

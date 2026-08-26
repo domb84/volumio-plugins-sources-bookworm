@@ -23,6 +23,8 @@ _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
+from .level_meter import LevelMeter
+
 # Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
 # mirrors the "+" prefix build_menu puts on folders.
 #
@@ -65,6 +67,9 @@ class MenuManager:
         # on screen -- see build_menu, _render_menu and show_track_info.
         self._nav_mode = True
 
+        # Hidden beta feature; built lazily so it costs nothing until used.
+        self._level_meter = None
+
     def run(self):
         """Claim the display and service the queues until stopped. Thread entry point.
 
@@ -78,6 +83,10 @@ class MenuManager:
         self._display = DisplayController()
         self._display.on()
         self.menu.message(('Initialising...').upper(), autoscroll=True)
+
+        # cava owns the audio tap and does the analysis; this only draws what it
+        # publishes, so nothing here can affect playback.
+        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
 
         # render main menu
         self.volumioQ.put({'button': 'menu'})
@@ -98,6 +107,8 @@ class MenuManager:
             'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
             'btn_sleep_timer_long': self._cancel_sleep_timer,
             'btn_dimmer': lambda: self._display.toggle(),
+            # Hidden beta: long-press the dimmer for the audio level meter.
+            'btn_dimmer_long': self._toggle_level_meter,
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
         }
 
@@ -120,6 +131,10 @@ class MenuManager:
                 if 'control' in queueItem:
                     action = queueItem['control']
                     if action in self.control_actions:
+                        # The meter owns the whole display, so any control other
+                        # than its own toggle means the user wants the menu back.
+                        if action != 'btn_dimmer_long' and self._meter_active():
+                            self._level_meter.stop()
                         self.menuAccessTime = datetime.now()
                         if self._suppressed_info is not None:
                             self._defer_info(self._suppressed_info)
@@ -223,6 +238,24 @@ class MenuManager:
             self.menu.processUp()
         else:
             self.volumioQ.put({'button': 'prev'})
+
+    def _toggle_level_meter(self) -> None:
+        """Start or stop the hidden audio level meter (long-press dimmer).
+
+        While it runs it owns the display, so the normal menu/track-info
+        rendering is paused -- see _meter_active.
+        """
+        if self._level_meter is None:      # not reached once run() has started
+            self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+
+        if self._level_meter.running:
+            self._level_meter.stop()
+            logger.info("Level meter off")
+        elif self._level_meter.start():
+            logger.info("Level meter on")
+
+    def _meter_active(self) -> bool:
+        return self._level_meter is not None and self._level_meter.running
 
     def _render_menu(self) -> None:
         """Re-render the current menu and restore the rotary encoder to nav mode.
@@ -351,6 +384,10 @@ class MenuManager:
         self.volumioQ.put({'show': 'info'})
 
     def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
+        # The level meter has the display; a background track-info or toast
+        # update would otherwise paint straight over it.
+        if self._meter_active():
+            return
         # clear: clears the display and renders nothing after (for shutdown)
         # static: leaves the message on screen with nothing rendering over it
         # autoscroll: scrolls the message then leaves it on screen
@@ -565,7 +602,11 @@ class MenuManager:
         # The owning service travels with the item. Volumio routes addPlay by
         # service name, and guessing it from the URI later gets it wrong (the
         # Spotify plugin registers as "spop", not "spotify").
-        self.volumioQ.put({'button': button_link, 'service': button_service})
+        # The title travels with the item for the same reason the service does:
+        # Volumio's queue keeps whatever we send verbatim, and an item without a
+        # name shows as nothing playing everywhere -- VFD and web UI alike.
+        self.volumioQ.put({'button': button_link, 'service': button_service,
+                           'title': button_name.lstrip('+')})
 
 
     def dimmer(self):
