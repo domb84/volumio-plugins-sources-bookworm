@@ -44,7 +44,7 @@ tenacity
 # branch too -- pushing to it does not move the version number, so pip has no
 # way to tell the new commit from the installed one:
 #
-#   pip install --force-reinstall --no-deps #     git+https://github.com/domb84/rpi-lcd-menu.git@fix-display-corruption
+#   pip install --force-reinstall --no-deps git+https://github.com/domb84/rpi-lcd-menu.git@fix-display-corruption
 #
 # TEMPORARY: pinned to the branch, not master, while the desync fix is being
 # tested on the device. Put this back to @master once it is merged.
