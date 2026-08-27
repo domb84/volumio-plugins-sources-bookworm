@@ -304,3 +304,30 @@ class TestPlayingUpdatesDismissTheIdleMeter:
         # _meter_auto is False, so the queue loop never calls _stop_auto_meter.
         m._level_meter.stop.assert_not_called()
         assert m._level_meter.running is True
+
+
+class TestDisplayWritesGoThroughTheLock:
+    """The library serialises display writes on a lock its worker thread holds.
+    Anything reaching past it to menu.lcd puts a second writer on the 4-bit data
+    pins, which desyncs the bus -- see NOTES.md ("Display driver")."""
+
+    def test_dimmer_toggles_through_the_menu_not_the_driver(self):
+        m = _bare_manager()
+
+        m.dimmer()
+
+        m.menu.toggle_display.assert_called_once_with()
+        m.menu.lcd.displayToggle.assert_not_called()
+
+    def test_no_source_file_reaches_past_the_lock_to_the_driver(self):
+        # Cheap guard against the next one: every write has a locked equivalent
+        # on the menu, so there is no legitimate reason to touch .lcd here.
+        import pathlib
+        root = pathlib.Path(mm.__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(root.glob('includes/*.py')) + [root / 'index.py']:
+            for number, line in enumerate(path.read_text(encoding='utf8').splitlines(), 1):
+                code = line.split('#')[0]
+                if '.lcd.' in code:
+                    offenders.append('%s:%d' % (path.name, number))
+        assert not offenders, "writes past the display lock: %s" % offenders

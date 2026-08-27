@@ -483,3 +483,51 @@ class TestMeterModes:
         meter._load_glyphs()
         loaded = [call[0][1] for call in menu.create_char.call_args_list]
         assert loaded == bar_bitmaps()
+
+
+class TestDisplayResync:
+    """The 4-bit bus has no RW line, so a mistimed nibble desyncs it and nothing
+    on this side can tell. The library resyncs periodically; the meter resyncs
+    at its own boundaries, which are the two moments most exposed to it and the
+    two where a dropped frame costs nothing."""
+
+    def test_starting_the_run_loop_resyncs_before_loading_glyphs(self):
+        menu = Mock()
+        meter = LevelMeter(menu, bars_path='/nonexistent')
+
+        meter._run()
+
+        # Glyphs are 72 bytes down the same bus; loading them onto a desynced
+        # one just writes garbage into CGRAM.
+        assert menu.method_calls[0][0] == 'resync_display'
+
+    def test_the_run_loop_resyncs_before_handing_the_display_back(self):
+        # The reported symptom was that switching back to the menu did not fix
+        # anything -- the menu was being drawn onto a still-desynced bus.
+        order = []
+        menu = Mock()
+        menu.resync_display.side_effect = lambda: order.append('resync')
+        meter = LevelMeter(menu, bars_path='/nonexistent',
+                           on_stop=lambda: order.append('on_stop'))
+
+        meter._run()
+
+        assert order[-2:] == ['resync', 'on_stop']
+
+    def test_an_older_library_without_resync_still_runs(self):
+        # requirements.txt asks for 2.4.0+, but pip cannot enforce it against an
+        # already-installed copy, so a missing resync_display must degrade to
+        # the previous behaviour rather than kill the meter thread.
+        menu = Mock(spec=['message', 'create_char', 'render_frame'])
+        meter = LevelMeter(menu, bars_path='/nonexistent')
+
+        meter._run()   # no AttributeError
+
+    def test_a_failing_resync_does_not_take_the_meter_down(self):
+        menu = Mock()
+        menu.resync_display.side_effect = OSError("gpio busy")
+        meter = LevelMeter(menu, bars_path='/nonexistent')
+
+        meter._run()
+
+        menu.create_char.assert_called()   # got past the resync and carried on

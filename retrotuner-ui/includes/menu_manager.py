@@ -646,6 +646,12 @@ class MenuManager:
 
 
     def dimmer(self):
-        self.menu.lcd.displayToggle()
+        # Through the menu, not menu.lcd. The library serialises every display
+        # write on a lock its own worker thread also holds; reaching past that
+        # to the driver puts a second writer on the 4-bit data pins, and two
+        # writers desync the bus for good -- see NOTES.md ("Display driver").
+        # The dimmer button itself goes via _display.toggle() (the socket,
+        # also locked); this stays for anything driving the menu directly.
+        self.menu.toggle_display()
 
 

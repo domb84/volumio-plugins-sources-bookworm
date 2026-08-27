@@ -258,6 +258,28 @@ class LevelMeter:
         except Exception:
             return False
 
+    def _resync_display(self):
+        """Re-run the display's 4-bit handshake at a meter boundary.
+
+        The bus has no RW line, so the busy flag cannot be read and every delay
+        in the driver is a fixed guess. One that comes up short costs a nibble,
+        and from then on every byte is misassembled -- see NOTES.md ("Display
+        driver"). Nothing on this side can detect that has happened.
+
+        The library resyncs periodically on its own, so this is not the safety
+        net; it just covers the two moments most exposed to it, at the two
+        points where a lost frame costs nothing anyway: 60fps rendering about
+        to start, and the menu about to come back after it.
+        """
+        resync = getattr(self._menu, 'resync_display', None)
+        if resync is None:
+            # Older rpi-lcd-menu without the recovery path; see requirements.txt.
+            return
+        try:
+            resync()
+        except Exception as e:
+            logger.debug("Display resync failed: %s", e)
+
     def _load_glyphs(self):
         """Fill CGRAM with this mode's glyph set. Once per run: the mode cannot
         change without a settings save, which restarts the service."""
@@ -290,6 +312,7 @@ class LevelMeter:
         last_sound = time.monotonic()
         showing_silence = False
         try:
+            self._resync_display()
             self._load_glyphs()
             # Non-blocking so the button press cannot hang, and a raw fd
             # because readline() cannot express "nothing yet" from end of file.
@@ -349,6 +372,10 @@ class LevelMeter:
                     os.close(fd)
                 except Exception:
                     pass
+            # Before the menu is redrawn, not after: an hour of 60fps is the
+            # most likely thing to have desynced the bus, and a menu drawn onto
+            # a desynced bus is the "switching back does not help" symptom.
+            self._resync_display()
             if self._on_stop is not None:
                 try:
                     self._on_stop()

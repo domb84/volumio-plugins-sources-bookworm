@@ -23,9 +23,9 @@ uvicorn
 # Retry helper used by the Volumio client
 tenacity
 
-# LCD menu library (forked). Two hard requirements, neither of which pip can
-# check -- the fork's version is 2.2.0 both before and after the second one, so
-# an already-installed copy looks satisfied either way:
+# LCD menu library (forked). Three hard requirements, none of which pip can
+# check -- the fork's version did not move for the first two, so an already
+# installed copy looks satisfied either way:
 #
 #   * create_char() and render_frame(), or the level meter dies at runtime with
 #     AttributeError rather than failing at install time
@@ -33,7 +33,19 @@ tenacity
 #     instead of ~14ms. The meter defaults to 60fps and offers 120, which the
 #     older timing cannot serve -- it would sit at 84% of wall time mid-render
 #     and starve the SPI button polling.
+#   * 2.4.0 or newer, for the enable-pulse hold and resync_display(). Without
+#     it the bus desyncs after an hour or so of the meter and stays broken
+#     until the service restarts -- see NOTES.md ("Display driver"). The meter
+#     degrades quietly on an older copy rather than crashing, so this one gives
+#     no symptom at install time either.
 #
-# So when updating an existing install, force it: pip will otherwise see 2.2.0
-# and skip the reinstall.
-git+https://github.com/domb84/rpi-lcd-menu.git@master
+# So when updating an existing install, force it: pip will otherwise see the
+# installed version and skip the reinstall. That applies to re-testing the same
+# branch too -- pushing to it does not move the version number, so pip has no
+# way to tell the new commit from the installed one:
+#
+#   pip install --force-reinstall --no-deps #     git+https://github.com/domb84/rpi-lcd-menu.git@fix-display-corruption
+#
+# TEMPORARY: pinned to the branch, not master, while the desync fix is being
+# tested on the device. Put this back to @master once it is merged.
+git+https://github.com/domb84/rpi-lcd-menu.git@fix-display-corruption

@@ -178,14 +178,68 @@ Two changes took a frame from ~14ms to ~2.7ms (ceiling roughly 370fps):
    `write4bits` waits only 50µs before the next byte, so the gap was 30× too
    short. It only worked because the padding delays in `pulseEnable` happened to
    stretch it.
-2. **No delays in `pulseEnable`.** `sleep()` has a floor of tens of
+2. **No `sleep()` in `pulseEnable`.** `sleep()` has a floor of tens of
    microseconds however small a value you pass, so three nominal 1µs delays cost
-   ~180µs per nibble and dominated every write. A single `RPi.GPIO` output call
-   already takes 1–2µs, comfortably over the 450ns the enable pulse needs.
+   ~180µs per nibble and dominated every write.
 
-(2) is only safe while the GPIO calls are slow. Driving E from pigpio waves or C
-would need real timing back. (1) must land before (2), since (2) removes the
-padding that was hiding it.
+(1) must land before (2), since (2) removes the padding that was hiding it.
+
+### The bus desync (fixed in 2.4.0)
+
+The first cut of (2) took the delays out and put nothing back, reasoning that a
+single `RPi.GPIO` output call takes 1–2µs and so clears the 450ns the enable
+pulse needs on its own. It does not. That is Python overhead, not a guarantee:
+0.4–2µs depending on CPU clock, cache and contention, and *shortest* under
+sustained rendering, when the governor is pinned at 1.4GHz. So the pulse is at
+its narrowest exactly when the display is busiest.
+
+There is no RW pin on this wiring, so the busy flag can never be read and every
+delay in the driver is a fixed guess. Undershoot one and the controller misses a
+nibble; from then on every byte is assembled from the low nibble of one write
+and the high nibble of the next. `0xC0` — "move to line 2" — is never seen
+intact, so all 32 characters of every frame land on line 1.
+
+That is the failure exactly as it presented: **line 2 dead and frozen on
+whatever it last held, line 1 flickering** because it is written twice a frame,
+sometimes full-screen garbage. It is not a gradual degradation. It runs clean
+until the first bad nibble and is broken from then on — which is why switching
+back to the menu did not help and only restarting the plugin did (that re-ran
+the `0x33`/`0x32` handshake). `initDisplay()` used to run once, in `__init__`,
+and never again.
+
+Removing `LCD_RETURNHOME` in (1) is what made it permanent rather than
+self-correcting: home also resets the display shift register, every frame, and
+that was the driver's only recovery behaviour.
+
+Two changes in 2.4.0:
+
+* **`pulseEnable` holds E for a real 1µs**, busy-waiting on `perf_counter()`
+  rather than sleeping. ~1.1µs actual against a 15ms floor for `sleep(50µs)` on
+  a dev box — an actual guarantee for roughly 150µs a frame, against the ~2ms a
+  frame the `command_delay_us` sleeps already cost.
+* **`resync_display()`**, which re-runs the handshake, reloads CGRAM and
+  redraws. `lcd_render` calls it every `RESYNC_FRAME_INTERVAL` frames (600, so
+  ~10s at 60fps), which turns "broken until restart" into "one bad frame". The
+  level meter also calls it when it starts and, more usefully, in its `finally`
+  before the menu is redrawn.
+
+Neither is the correct fix. The correct fix is to wire RW and poll the busy
+flag, which removes every fixed delay in the driver; that is a hardware change.
+Worth checking first, and not determinable from the code: whether the module is
+a 5V part being fed 3.3V logic, in which case V_IH is ~3.5V and every edge is
+marginal — that would explain the thermal sensitivity better than clock scaling
+alone.
+
+### One writer at a time
+
+Every display write goes through `RpiLCDMenu`, which serialises on a lock its
+own worker thread holds while rendering. **Never call `menu.lcd.*` directly** —
+that reaches past the lock and puts a second writer on the data pins, which
+desyncs the bus just as reliably as a short pulse does. `menu.toggle_display()`,
+not `menu.lcd.displayToggle()`; `menu.clearDisplay()`, which locks internally,
+not `menu.lcd.write4bits(...)`. This matters most for anything on a
+`threading.Timer` (`_schedule_deferred`) or on the meter thread, since those run
+alongside the worker by definition.
 
 `command_delay_us = 50` in `write4bits` is what gives the controller its 37µs to
 settle. Removing that one *will* drop characters.

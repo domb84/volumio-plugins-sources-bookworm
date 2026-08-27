@@ -1,6 +1,6 @@
 {
 	"name": "retrotuner-ui",
-	"version": "3.3.0",
+	"version": "3.3.1",
 	"description": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
 	"main": "index.js",
 	"scripts": {
