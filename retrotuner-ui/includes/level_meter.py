@@ -32,15 +32,43 @@ logger = logging.getLogger("Level Meter")
 LCD_COLUMNS = 16
 LCD_ROWS = 2
 
-# CGRAM glyph codes. 0-7 are the only slots the HD44780 has; note 0x0A would be
-# "\n", which lcd_render() treats as a line break, so staying inside 0-7 keeps
-# frames safe to build as ordinary strings.
-BAR_GLYPHS = tuple(range(8))
-
 # Rows of pixels in one character cell. Two rows of cells give 16 vertical steps
 # per column, which is what cava's ascii_max_range is set to.
 CELL_ROWS = 8
 MAX_LEVEL = CELL_ROWS * LCD_ROWS
+
+# Display modes. The first two stack both rows into one tall bar and differ only
+# in what cava sends; the "rows" pair give each channel a row of its own.
+MODE_MONO = 'mono'                # 16 bands, full height
+MODE_STEREO = 'stereo'            # cava mirrors L/R about the centre, 8 bands each
+MODE_ROWS_EDGES = 'rows_edges'    # L hangs from the top, R rises from the bottom
+MODE_ROWS_CENTRE = 'rows_centre'  # L grows up from the middle, R grows down
+SUPPORTED_MODES = (MODE_MONO, MODE_STEREO, MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
+SPLIT_MODES = (MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
+
+# Vertical steps per channel in the split modes, and the hard reason for it.
+#
+# Each channel gets one character row, so its bar is drawn inside a single cell
+# and needs its own glyph per height. One row grows downward from the top of the
+# cell and the other upward from the bottom, and those are different bitmaps --
+# a top-anchored bar is not an upside-down bottom-anchored one that the
+# controller could flip, because the controller cannot flip anything.
+#
+# That means two glyph sets out of the eight CGRAM slots that exist, so four
+# heights each. The trade against the full-height modes is deliberate and the
+# whole point of this layout: 16 frequency bands per channel instead of 8, paid
+# for with 4 amplitude steps instead of 16.
+SPLIT_LEVELS = 4
+SPLIT_CELL_STEP = CELL_ROWS // SPLIT_LEVELS   # pixel rows added per level
+
+# CGRAM glyph codes. 0-7 are the only slots the HD44780 has; note 0x0A would be
+# "\n", which lcd_render() treats as a line break, so staying inside 0-7 keeps
+# frames safe to build as ordinary strings.
+#
+# The two split sets are disjoint, so both fit in CGRAM at the same time.
+BAR_GLYPHS = tuple(range(8))                  # full-height modes: heights 1..8
+SPLIT_UP_GLYPHS = tuple(range(0, 4))          # anchored to the bottom of the cell
+SPLIT_DOWN_GLYPHS = tuple(range(4, 8))        # anchored to the top of the cell
 
 # cava's raw ascii output: one line per frame, values separated by ";".
 DEFAULT_BARS_PATH = "/tmp/retrotuner-bars"
@@ -111,13 +139,75 @@ def bar_bitmaps():
     return glyphs
 
 
-def parse_bars(line):
+def split_bitmaps():
+    """The 8 CGRAM glyphs for the split modes: 4 anchored down, 4 anchored up.
+
+    Slots 0-3 are bars rising from the bottom of the cell, 4-7 the same heights
+    hanging from the top. Both sets are needed at once because the two rows grow
+    towards each other (or away from each other), and the controller has no way
+    to mirror a glyph.
+    """
+    glyphs = []
+    for height in range(SPLIT_CELL_STEP, CELL_ROWS + 1, SPLIT_CELL_STEP):
+        glyphs.append([0b00000] * (CELL_ROWS - height) + [0b11111] * height)
+    for height in range(SPLIT_CELL_STEP, CELL_ROWS + 1, SPLIT_CELL_STEP):
+        glyphs.append([0b11111] * height + [0b00000] * (CELL_ROWS - height))
+    return glyphs
+
+
+def split_channels(levels):
+    """Split one cava stereo frame into (left, right) columns.
+
+    cava emits the two channels as one array laid out for a mirrored display:
+    the first half is the left channel running high frequency to low, so that
+    bass meets in the centre, and the second half is the right channel the usual
+    way round. Reversing the first half puts both channels back into low-to-high
+    order, which is what a row of its own wants.
+
+    If the display comes out with the channels swapped or the spectrum running
+    backwards, this is the only place that decides it.
+    """
+    half = len(levels) // 2
+    if half == 0:
+        return [], []
+    return list(reversed(levels[:half])), list(levels[half:])
+
+
+def render_split(left, right, from_edges):
+    """Build a frame with one channel per row, each drawn inside a single cell.
+
+    ``from_edges`` picks which way the bars grow. True anchors zero at the outer
+    edges, so the left channel hangs down from the top and the right rises up
+    from the bottom and a loud signal closes the gap in the middle. False anchors
+    zero at the centre line, so both grow outwards towards the edges.
+
+    Only the glyph set each row uses changes between the two.
+    """
+    top_glyphs = SPLIT_DOWN_GLYPHS if from_edges else SPLIT_UP_GLYPHS
+    bottom_glyphs = SPLIT_UP_GLYPHS if from_edges else SPLIT_DOWN_GLYPHS
+
+    def row(levels, glyphs):
+        cells = []
+        for level in levels[:LCD_COLUMNS]:
+            level = max(0, min(int(level), SPLIT_LEVELS))
+            cells.append(' ' if level == 0 else chr(glyphs[level - 1]))
+        return ''.join(cells).ljust(LCD_COLUMNS)
+
+    return '%s\n%s' % (row(left, top_glyphs), row(right, bottom_glyphs))
+
+
+def parse_bars(line, max_level=MAX_LEVEL, columns=LCD_COLUMNS):
     """Turn one line of cava raw ascii output into a list of column levels.
 
     cava emits "3;7;12;16;..." with a trailing separator, and is configured with
     ascii_max_range to match the display, so the values need no scaling. Short,
     long or malformed lines are tolerated: a partially written line is normal
     when reading a fifo that a separate process is appending to.
+
+    ``max_level`` and ``columns`` differ by mode: the full-height modes take 16
+    columns of 0..16, the split modes take 32 columns -- both channels -- of
+    0..4. Both mirror what the mode writes into cava's config, so neither end
+    scales anything.
     """
     if not line:
         return []
@@ -130,9 +220,9 @@ def parse_bars(line):
             value = int(field)
         except ValueError:
             continue                      # partial write; drop the fragment
-        levels.append(max(0, min(value, MAX_LEVEL)))
+        levels.append(max(0, min(value, max_level)))
 
-    return levels[:LCD_COLUMNS]
+    return levels[:columns]
 
 
 def render_columns(levels):
@@ -168,14 +258,21 @@ class LevelMeter:
     """
 
     def __init__(self, menu, bars_path=DEFAULT_BARS_PATH, on_stop=None,
-                 frame_rate=FRAMES_PER_SECOND):
+                 frame_rate=FRAMES_PER_SECOND, mode=MODE_MONO):
         self._menu = menu
         self._bars_path = bars_path
         self._on_stop = on_stop
         self._frame_interval = frame_interval(frame_rate)
+        self._mode = mode if mode in SUPPORTED_MODES else MODE_MONO
+        if mode not in SUPPORTED_MODES:
+            logger.warning("Unknown meter mode %r; using %s", mode, MODE_MONO)
         self._thread = None
         self._stop = threading.Event()
         self._glyphs_loaded = False
+
+    @property
+    def _split(self):
+        return self._mode in SPLIT_MODES
 
     @property
     def running(self):
@@ -225,11 +322,34 @@ class LevelMeter:
             return False
 
     def _load_glyphs(self):
+        """Fill CGRAM with the glyph set this mode draws from.
+
+        Loaded once per run rather than per frame: all 8 slots are rewritten,
+        and the mode cannot change without a settings save, which restarts the
+        service anyway.
+        """
         if self._glyphs_loaded:
             return
-        for location, bitmap in enumerate(bar_bitmaps()):
+        bitmaps = split_bitmaps() if self._split else bar_bitmaps()
+        for location, bitmap in enumerate(bitmaps):
             self._menu.create_char(location, bitmap)
         self._glyphs_loaded = True
+
+    def _build_frame(self, line):
+        """Turn one cava line into a frame, or None if it carried no levels."""
+        if self._split:
+            levels = parse_bars(line, max_level=SPLIT_LEVELS,
+                                columns=LCD_COLUMNS * 2)
+            if not levels:
+                return None, levels
+            left, right = split_channels(levels)
+            return render_split(left, right,
+                                from_edges=self._mode == MODE_ROWS_EDGES), levels
+
+        levels = parse_bars(line)
+        if not levels:
+            return None, levels
+        return render_columns(levels), levels
 
     def _run(self):
         fd = None
@@ -276,7 +396,8 @@ class LevelMeter:
                 if len(pending) > MAX_PENDING:
                     pending = b''
 
-                levels = parse_bars(latest) if latest is not None else None
+                frame, levels = (self._build_frame(latest)
+                                 if latest is not None else (None, None))
                 if levels and any(levels):
                     last_sound = started
 
@@ -288,9 +409,9 @@ class LevelMeter:
                     if not showing_silence:
                         self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
                         showing_silence = True
-                elif levels:
+                elif frame is not None:
                     showing_silence = False
-                    self._menu.render_frame(render_columns(levels))
+                    self._menu.render_frame(frame)
 
                 remaining = self._frame_interval - (time.monotonic() - started)
                 if remaining > 0:

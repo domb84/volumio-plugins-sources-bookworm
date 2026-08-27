@@ -182,7 +182,7 @@ class TestMeterFrameRateSettings:
         assert section["onSave"]["method"] == "saveOptions"
 
 
-class TestMeterStereoSetting:
+class TestMeterModeSetting:
     """Stereo mode is purely a cava setting -- it still emits 16 bars, so nothing
     on the python side changes. What has to hold is that index.js can find the
     key to rewrite, and that it rewrites the right one."""
@@ -235,24 +235,56 @@ class TestMeterStereoSetting:
         sections = self._cava_sections()
         assert "framerate" in sections["general"]
 
-    def test_config_default_is_mono(self):
-        # Matches the shipped cava config, so a fresh install is self-consistent
-        # before anyone opens the settings page.
-        stereo = self._load_json("config.json")["meter_stereo"]["value"]
-        assert stereo is False
-        assert self._cava_sections()["output"]["channels"] == "mono"
-
-    def test_the_switch_exists_and_is_saved(self):
+    def _mode_field(self):
         ui = self._load_json("UIConfig.json")
         section = next(s for s in ui["sections"] if s["id"] == "level_meter")
-        field = next(c for c in section["content"] if c["id"] == "meter_stereo")
-        assert field["element"] == "switch"
-        assert "meter_stereo" in section["saveButton"]["data"]
+        return section, next(c for c in section["content"] if c["id"] == "meter_mode")
 
-    def test_it_is_a_switch_not_a_select(self):
-        # saveOptions' isValid() only accepts numbers and booleans, so a select
-        # posting "stereo" as a string would be rejected and silently not saved.
-        ui = self._load_json("UIConfig.json")
-        section = next(s for s in ui["sections"] if s["id"] == "level_meter")
-        field = next(c for c in section["content"] if c["id"] == "meter_stereo")
-        assert isinstance(field["value"], bool)
+    def test_config_default_matches_the_shipped_cava_config(self):
+        # A fresh install must be self-consistent before anyone opens settings:
+        # mono means 16 bars over one channel at full height.
+        from includes.level_meter import MODE_MONO, MAX_LEVEL
+        assert self._load_json("config.json")["meter_mode"]["value"] == MODE_MONO
+        general, output = self._cava_sections()["general"], self._cava_sections()["output"]
+        assert output["channels"] == "mono"
+        assert int(general["bars"]) == 16
+        assert int(output["ascii_max_range"]) == MAX_LEVEL
+
+    def test_the_dropdown_offers_exactly_the_supported_modes(self):
+        from includes.level_meter import SUPPORTED_MODES
+        _section, field = self._mode_field()
+        assert tuple(o["value"] for o in field["options"]) == SUPPORTED_MODES
+
+    def test_every_mode_is_labelled(self):
+        _section, field = self._mode_field()
+        for option in field["options"]:
+            assert option["label"] and option["label"] != option["value"]
+
+    def test_the_field_is_saved_by_its_section(self):
+        section, _field = self._mode_field()
+        assert "meter_mode" in section["saveButton"]["data"]
+
+    def test_the_old_switch_is_gone(self):
+        # It became a select. Leaving the switch behind would give two controls
+        # writing the same thing, with the switch silently winning on save.
+        section, _field = self._mode_field()
+        assert "meter_stereo" not in [c["id"] for c in section["content"]]
+        assert "meter_stereo" not in section["saveButton"]["data"]
+        assert "meter_stereo" not in self._load_json("config.json")
+
+    def test_the_old_switch_still_migrates(self):
+        # index.js rewrites the key on plugin start, but a config that has not
+        # been through that yet must still pick the right layout.
+        from includes.level_meter import MODE_STEREO, MODE_MONO
+        assert index.parse_meter_mode({"meter_stereo": {"value": True}}) == MODE_STEREO
+        assert index.parse_meter_mode({"meter_stereo": {"value": False}}) == MODE_MONO
+
+    def test_a_known_mode_wins_over_the_old_switch(self):
+        from includes.level_meter import MODE_ROWS_EDGES
+        config = {"meter_mode": {"value": "rows_edges"}, "meter_stereo": {"value": True}}
+        assert index.parse_meter_mode(config) == MODE_ROWS_EDGES
+
+    def test_an_unknown_mode_falls_back_rather_than_crashing(self):
+        from includes.level_meter import MODE_MONO
+        assert index.parse_meter_mode({"meter_mode": {"value": "spiral"}}) == MODE_MONO
+        assert index.parse_meter_mode({}) == MODE_MONO

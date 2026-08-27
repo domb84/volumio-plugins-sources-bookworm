@@ -120,6 +120,38 @@ function replaceInIniSection(contents, sectionName, key, value) {
     return replaced ? lines.join('\n') : null;
 }
 
+// What each display mode needs from cava. The split layouts ask for both
+// channels at full width -- 32 bars, 16 per channel -- and for a range of 4,
+// because a channel confined to one character row has only four height steps
+// available (see SPLIT_LEVELS in includes/level_meter.py). Neither end scales
+// anything, so these have to match what the renderer expects.
+var METER_MODES = {
+    mono:        { bars: 16, channels: 'mono',   range: 16 },
+    stereo:      { bars: 16, channels: 'stereo', range: 16 },
+    rows_edges:  { bars: 32, channels: 'stereo', range: 4 },
+    rows_centre: { bars: 32, channels: 'stereo', range: 4 }
+};
+
+// Human-readable names for the layout select, kept next to METER_MODES so the
+// two cannot drift. Also the source of the label getUIConfig hands back: a
+// select renders blank until it is given one.
+var METER_MODE_LABELS = {
+    mono:        'Mono - 16 bands, full height',
+    stereo:      'Stereo mirrored - 8 bands per channel',
+    rows_edges:  'Stereo rows - grow in from the edges',
+    rows_centre: 'Stereo rows - grow out from the centre'
+};
+
+// Settings whose value is a string rather than a number or boolean, with the
+// exact set each may hold. saveOptions validates against this.
+var STRING_SETTINGS = {
+    meter_mode: Object.keys(METER_MODES)
+};
+
+retrotunerui.prototype.meterModeLabel = function (mode) {
+    return METER_MODE_LABELS[mode] || METER_MODE_LABELS.mono;
+};
+
 // Push the meter settings into cava's config. Both are written together because
 // both are only read when cava starts, so they share one restart.
 retrotunerui.prototype.applyCavaSettings = function () {
@@ -127,10 +159,12 @@ retrotunerui.prototype.applyCavaSettings = function () {
     const conf = __dirname + '/' + CAVA_CONF;
 
     const rate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
-    const channels = Boolean(self.config.get('meter_stereo', false)) ? 'stereo' : 'mono';
+    const mode = METER_MODES[self.config.get('meter_mode', 'mono')] || METER_MODES.mono;
     const wanted = [
         ['general', 'framerate', rate],
-        ['output', 'channels', channels]
+        ['general', 'bars', mode.bars],
+        ['output', 'channels', mode.channels],
+        ['output', 'ascii_max_range', mode.range]
     ];
 
     try {
@@ -150,7 +184,8 @@ retrotunerui.prototype.applyCavaSettings = function () {
         }
 
         fs.writeFileSync(conf, contents, 'utf8');
-        self.logger.info('RetroTuner UI - cava set to ' + rate + ' fps, ' + channels);
+        self.logger.info('RetroTuner UI - cava set to ' + rate + ' fps, ' + mode.bars +
+            ' bars, ' + mode.channels + ', range ' + mode.range);
         return true;
     } catch (e) {
         self.logger.error('RetroTuner UI - could not write cava settings: ' + e);
@@ -226,6 +261,19 @@ retrotunerui.prototype.onStart = function() {
     // update, while the chosen rate lives in config.json and survives. Reapply
     // it here or the two silently diverge: cava analysing at one rate and the
     // meter drawing at another, with nothing to report the mismatch.
+    // meter_stereo (a switch) became meter_mode (a select) when the split-row
+    // layouts arrived, and v-conf keeps whatever an existing install already
+    // wrote. Carry the old choice across once, then drop the dead key so this
+    // cannot fire again and overwrite a later choice.
+    if (self.config.has('meter_stereo')) {
+        if (Boolean(self.config.get('meter_stereo')) &&
+            String(self.config.get('meter_mode', 'mono')) === 'mono') {
+            self.config.set('meter_mode', 'stereo');
+            self.logger.info('RetroTuner UI - migrated meter_stereo to meter_mode = stereo');
+        }
+        self.config.delete('meter_stereo');
+    }
+
     if (tapEnabled) {
         self.applyCavaSettings();
     }
@@ -337,7 +385,9 @@ retrotunerui.prototype.getUIConfig = function() {
             const meterRate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
             setValue(section('level_meter'), 'meter_framerate',
                      { value: meterRate, label: meterRate + ' fps' });
-            setValue(section('level_meter'), 'meter_stereo', self.config.get('meter_stereo', false));
+            const meterMode = String(self.config.get('meter_mode', 'mono'));
+            setValue(section('level_meter'), 'meter_mode',
+                     { value: meterMode, label: self.meterModeLabel(meterMode) });
 
             // Also new -- default matches apply_log_level()'s own fallback in index.py.
             setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
@@ -391,7 +441,13 @@ retrotunerui.prototype.saveOptions = function (data) {
     // only ever written by the capture flow (self.config.set() below), which
     // bypasses this validation entirely, so no button-mapping grammar needs
     // handling here.
-    function isValid(value) {
+    function isValid(key, value) {
+        // A select posts a string. Rather than loosening this to accept any
+        // string -- which would let a typo through into cava's config -- each
+        // such field declares the exact set it may hold.
+        if (STRING_SETTINGS.hasOwnProperty(key)) {
+            return STRING_SETTINGS[key].indexOf(value) !== -1;
+        }
         if (typeof value === 'boolean') {
             return true;
         }
@@ -401,18 +457,19 @@ retrotunerui.prototype.saveOptions = function (data) {
     // A select posts {value, label}; everything else posts a bare value. Flatten
     // it before the validation loop below, which only understands numbers and
     // booleans and would otherwise reject the whole field.
-    if (data.hasOwnProperty('meter_framerate') && data.meter_framerate !== null &&
-        typeof data.meter_framerate === 'object') {
-        data.meter_framerate = data.meter_framerate.value;
+    for (const key of ['meter_framerate', 'meter_mode']) {
+        if (data.hasOwnProperty(key) && data[key] !== null && typeof data[key] === 'object') {
+            data[key] = data[key].value;
+        }
     }
 
     // Captured before the save loop overwrites them. Only a real change is worth
     // bouncing cava for -- see the restart below.
     const meterRateChanged = data.hasOwnProperty('meter_framerate') &&
         parseInt(data.meter_framerate, 10) !== parseInt(self.config.get('meter_framerate', 60), 10);
-    const meterStereoChanged = data.hasOwnProperty('meter_stereo') &&
-        Boolean(data.meter_stereo) !== Boolean(self.config.get('meter_stereo', false));
-    const meterChanged = meterRateChanged || meterStereoChanged;
+    const meterModeChanged = data.hasOwnProperty('meter_mode') &&
+        String(data.meter_mode) !== String(self.config.get('meter_mode', 'mono'));
+    const meterChanged = meterRateChanged || meterModeChanged;
 
     self.logger.info('RetroTuner UI - saving settings');
 
@@ -427,7 +484,7 @@ retrotunerui.prototype.saveOptions = function (data) {
         if (jsonObject.hasOwnProperty(key)) {
             const value = jsonObject[key];
             // console.log(`${key}: ${value}`);
-            if (isValid(value)) {
+            if (isValid(key, value)) {
                 self.config.set(key, value);
             } else {
                 self.logger.error(`${value} is not a valid number or boolean. Not saving ${key}.`);

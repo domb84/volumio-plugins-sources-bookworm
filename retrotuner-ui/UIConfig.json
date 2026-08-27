@@ -411,7 +411,7 @@
       "element": "section",
       "label": "Audio Level Meter",
       "icon": "fa-signal",
-      "description": "The spectrum display, shown by long-pressing the dimmer and after 30 seconds idle while something is playing. Higher rates look smoother but cost CPU: 60 uses roughly 20% on a Pi 3B+, 120 around 40%. Drop to 15 if button presses start feeling sluggish. Stereo splits the 16 columns into two 8-band meters mirrored around the centre, one per channel; off, all 16 columns cover the whole frequency range. Saving this restarts the analyser, which may briefly interrupt playback.",
+      "description": "The spectrum display, shown by long-pressing the dimmer and after 30 seconds idle while something is playing. Higher rates look smoother but cost CPU: 60 uses roughly 20% on a Pi 3B+, 120 around 40%. Drop to 15 if button presses start feeling sluggish. Layout: mono spends all 16 columns on the whole frequency range. Stereo mirrored splits them into two 8-band meters either side of the centre. The two stereo row layouts give each channel a full 16 bands on a row of its own - twice the detail across the spectrum, but only 4 height steps instead of 16, because the display has just 8 custom characters to share between them. Saving this restarts the analyser, which may briefly interrupt playback.",
       "onSave": {
         "type": "controller",
         "endpoint": "user_interface/retrotuner-ui",
@@ -421,7 +421,7 @@
         "label": "Save",
         "data": [
           "meter_framerate",
-          "meter_stereo"
+          "meter_mode"
         ]
       },
       "content": [
@@ -453,10 +453,31 @@
           ]
         },
         {
-          "id": "meter_stereo",
-          "element": "switch",
-          "label": "Stereo (8 bands per channel)",
-          "value": false
+          "id": "meter_mode",
+          "element": "select",
+          "label": "Layout",
+          "value": {
+            "value": "mono",
+            "label": "Mono - 16 bands, full height"
+          },
+          "options": [
+            {
+              "value": "mono",
+              "label": "Mono - 16 bands, full height"
+            },
+            {
+              "value": "stereo",
+              "label": "Stereo mirrored - 8 bands per channel"
+            },
+            {
+              "value": "rows_edges",
+              "label": "Stereo rows - grow in from the edges"
+            },
+            {
+              "value": "rows_centre",
+              "label": "Stereo rows - grow out from the centre"
+            }
+          ]
         }
       ]
     },

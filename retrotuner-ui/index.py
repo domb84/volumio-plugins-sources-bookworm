@@ -96,6 +96,24 @@ def load_button_skip_config(config_data: Dict[str, Any]) -> Dict[str, Tuple[str,
     }
 
 
+def parse_meter_mode(config_data: Dict[str, Any]) -> str:
+    """Read the level meter layout, falling back through the setting it replaced.
+
+    index.js migrates meter_stereo to meter_mode on plugin start, so this only
+    matters for a config that has not been through that yet -- a hand-edited
+    file, or the python service winning the race on a first start after an
+    update. Cheap enough to be worth not showing the wrong layout over.
+    """
+    mode = config_data.get("meter_mode", {}).get("value")
+    if mode in level_meter.SUPPORTED_MODES:
+        return mode
+    if mode is not None:
+        logger.warning("Unknown meter_mode %r; falling back", mode)
+    if bool(config_data.get("meter_stereo", {}).get("value", False)):
+        return level_meter.MODE_STEREO
+    return level_meter.MODE_MONO
+
+
 def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, threading.Thread, threading.Thread, threading.Thread]:
     buttons_clk = parse_int_field(config_data, "buttons_clk")
     buttons_miso = parse_int_field(config_data, "buttons_miso")
@@ -120,6 +138,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     # Half of one setting: index.js rewrites cava's framerate to match on save.
     meter_frame_rate = parse_optional_int_field(
         config_data, "meter_framerate", level_meter.FRAMES_PER_SECOND)
+    meter_mode = parse_meter_mode(config_data)
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -163,6 +182,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
         rotary_skip_track=rotary_skip_track,
         meter_frame_rate=meter_frame_rate,
+        meter_mode=meter_mode,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 
