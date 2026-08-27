@@ -121,3 +121,170 @@ class TestApplyLogLevel:
     def test_true_sets_debug(self):
         index.apply_log_level({"debug_mode": {"value": True}})
         assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+
+
+class TestMeterFrameRateSettings:
+    """The refresh rate is defined in four places that cannot import each other:
+    config.json, UIConfig.json, the cava config and includes/level_meter.py.
+
+    Nothing at runtime would report a mismatch -- a stale UIConfig option would
+    just save a rate cava never runs at, and the meter would draw at a different
+    rate from the analyser. So it is pinned here instead.
+    """
+
+    def _plugin_dir(self):
+        import os
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _load(self, name):
+        import io
+        import os
+        with io.open(os.path.join(self._plugin_dir(), name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def _ui_field(self):
+        ui = self._load("UIConfig.json")
+        for section in ui["sections"]:
+            for item in section.get("content", []):
+                if item.get("id") == "meter_framerate":
+                    return section, item
+        raise AssertionError("no meter_framerate field in UIConfig.json")
+
+    def test_config_json_carries_a_default(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        default = self._load("config.json")["meter_framerate"]["value"]
+        assert int(default) == FRAMES_PER_SECOND
+
+    def test_index_py_reads_it(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        config = {"meter_framerate": {"value": "30"}}
+        assert index.parse_optional_int_field(config, "meter_framerate", FRAMES_PER_SECOND) == 30
+
+    def test_an_older_config_without_the_key_still_starts(self):
+        from includes.level_meter import FRAMES_PER_SECOND
+        assert index.parse_optional_int_field({}, "meter_framerate", FRAMES_PER_SECOND) \
+            == FRAMES_PER_SECOND
+
+    def test_the_dropdown_offers_exactly_the_supported_rates(self):
+        from includes.level_meter import SUPPORTED_FRAME_RATES
+        _section, field = self._ui_field()
+        assert tuple(o["value"] for o in field["options"]) == SUPPORTED_FRAME_RATES
+
+    def test_every_option_is_labelled_in_fps(self):
+        _section, field = self._ui_field()
+        for option in field["options"]:
+            assert option["label"] == "%d fps" % option["value"]
+
+    def test_the_field_is_saved_by_its_section(self):
+        # A field missing from saveButton.data is rendered but never submitted.
+        section, _field = self._ui_field()
+        assert "meter_framerate" in section["saveButton"]["data"]
+        assert section["onSave"]["method"] == "saveOptions"
+
+
+class TestMeterModeSetting:
+    """Stereo mode is purely a cava setting -- it still emits 16 bars, so nothing
+    on the python side changes. What has to hold is that index.js can find the
+    key to rewrite, and that it rewrites the right one."""
+
+    def _plugin_dir(self):
+        import os
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _cava_sections(self):
+        """{section: {key: value}} for the shipped cava config."""
+        import io
+        import os
+        sections = {}
+        current = None
+        path = os.path.join(self._plugin_dir(), "cava", "retrotuner-cava.conf")
+        with io.open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith((";", "#")):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    current = line[1:-1].strip()
+                    sections[current] = {}
+                elif "=" in line and current is not None:
+                    key, _, value = line.partition("=")
+                    sections[current][key.strip()] = value.strip()
+        return sections
+
+    def _load_json(self, name):
+        import io
+        import os
+        with io.open(os.path.join(self._plugin_dir(), name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_channels_appears_in_both_cava_sections(self):
+        # The whole reason index.js edits this file by section: a plain line
+        # match on "channels" would hit [input] first and rewrite the tap's
+        # channel count with "mono", breaking the analyser's view of the audio.
+        sections = self._cava_sections()
+        assert "channels" in sections["input"]
+        assert "channels" in sections["output"]
+
+    def test_input_channels_is_a_count_and_output_is_a_mode(self):
+        sections = self._cava_sections()
+        assert sections["input"]["channels"].isdigit()
+        assert sections["output"]["channels"] in ("mono", "stereo")
+
+    def test_framerate_is_under_general(self):
+        # index.js looks for it there specifically.
+        sections = self._cava_sections()
+        assert "framerate" in sections["general"]
+
+    def _mode_field(self):
+        ui = self._load_json("UIConfig.json")
+        section = next(s for s in ui["sections"] if s["id"] == "level_meter")
+        return section, next(c for c in section["content"] if c["id"] == "meter_mode")
+
+    def test_config_default_matches_the_shipped_cava_config(self):
+        # A fresh install must be self-consistent before anyone opens settings:
+        # mono means 16 bars over one channel at full height.
+        from includes.level_meter import MODE_MONO, MAX_LEVEL
+        assert self._load_json("config.json")["meter_mode"]["value"] == MODE_MONO
+        general, output = self._cava_sections()["general"], self._cava_sections()["output"]
+        assert output["channels"] == "mono"
+        assert int(general["bars"]) == 16
+        assert int(output["ascii_max_range"]) == MAX_LEVEL
+
+    def test_the_dropdown_offers_exactly_the_supported_modes(self):
+        from includes.level_meter import SUPPORTED_MODES
+        _section, field = self._mode_field()
+        assert tuple(o["value"] for o in field["options"]) == SUPPORTED_MODES
+
+    def test_every_mode_is_labelled(self):
+        _section, field = self._mode_field()
+        for option in field["options"]:
+            assert option["label"] and option["label"] != option["value"]
+
+    def test_the_field_is_saved_by_its_section(self):
+        section, _field = self._mode_field()
+        assert "meter_mode" in section["saveButton"]["data"]
+
+    def test_the_old_switch_is_gone(self):
+        # It became a select. Leaving the switch behind would give two controls
+        # writing the same thing, with the switch silently winning on save.
+        section, _field = self._mode_field()
+        assert "meter_stereo" not in [c["id"] for c in section["content"]]
+        assert "meter_stereo" not in section["saveButton"]["data"]
+        assert "meter_stereo" not in self._load_json("config.json")
+
+    def test_the_old_switch_still_migrates(self):
+        # index.js rewrites the key on plugin start, but a config that has not
+        # been through that yet must still pick the right layout.
+        from includes.level_meter import MODE_STEREO, MODE_MONO
+        assert index.parse_meter_mode({"meter_stereo": {"value": True}}) == MODE_STEREO
+        assert index.parse_meter_mode({"meter_stereo": {"value": False}}) == MODE_MONO
+
+    def test_a_known_mode_wins_over_the_old_switch(self):
+        from includes.level_meter import MODE_ROWS_EDGES
+        config = {"meter_mode": {"value": "rows_edges"}, "meter_stereo": {"value": True}}
+        assert index.parse_meter_mode(config) == MODE_ROWS_EDGES
+
+    def test_an_unknown_mode_falls_back_rather_than_crashing(self):
+        from includes.level_meter import MODE_MONO
+        assert index.parse_meter_mode({"meter_mode": {"value": "spiral"}}) == MODE_MONO
+        assert index.parse_meter_mode({}) == MODE_MONO

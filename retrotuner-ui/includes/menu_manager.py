@@ -23,19 +23,18 @@ _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
-from .level_meter import LevelMeter
+from .level_meter import FRAMES_PER_SECOND, MODE_MONO, LevelMeter
 
-# Plain ASCII: the HD44780-compatible display has no arrow glyph, and this
-# mirrors the "+" prefix build_menu puts on folders.
-#
-# One chevron, not two: rpilcdmenu renders the selected row as ">" + text, so
-# the cursor supplies the second one and this reads ">> PLAY ALL" in place.
+# Plain ASCII -- the display has no arrow glyph. One chevron, not two:
+# rpilcdmenu adds ">" to the selected row, so this reads ">> PLAY ALL" in place.
 PLAY_ALL_LABEL = '> Play All'
 
 class MenuManager:
     """LCD menu manager: consumes control/menu queues and updates the LCD."""
 
-    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False):
+    def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False,
+                 meter_frame_rate: int = FRAMES_PER_SECOND,
+                 meter_mode: str = MODE_MONO):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
@@ -60,15 +59,29 @@ class MenuManager:
         self._idle_timer: Optional[threading.Timer] = None
         self._current_context: Optional[str] = None
 
-        # True while the rotary encoder scrolls the menu; False once the screen
-        # has fallen back to showing what's playing, where it skips tracks
-        # instead. Only ever set alongside an actual LCD write (menu.render() or
-        # menu.message() in show_track_info) so it always matches what's really
-        # on screen -- see build_menu, _render_menu and show_track_info.
+        # True while the rotary scrolls the menu, False once the screen shows
+        # what's playing and it skips tracks instead. Only ever set alongside an
+        # actual LCD write, so it always matches what is on screen.
         self._nav_mode = True
+
+        # How fast the level meter redraws. Set from the plugin settings, which
+        # also rewrite cava's own framerate -- the two are halves of one setting.
+        self._meter_frame_rate = meter_frame_rate
+        # Which layout the meter draws. Chosen alongside the rate, and paired
+        # with cava's bars/channels/ascii_max_range by index.js.
+        self._meter_mode = meter_mode
 
         # Hidden beta feature; built lazily so it costs nothing until used.
         self._level_meter = None
+
+        # Whether audio is playing, pushed by the Volumio worker on change. The
+        # idle timeout uses it to decide between the meter and the now-playing
+        # screen; pause and stop both count as not playing.
+        self._playing = False
+        # True only while the meter is up because the display went idle. A meter
+        # the user asked for by long-pressing the dimmer stays until they dismiss
+        # it, even if the music stops.
+        self._meter_auto = False
 
     def run(self):
         """Claim the display and service the queues until stopped. Thread entry point.
@@ -86,7 +99,9 @@ class MenuManager:
 
         # cava owns the audio tap and does the analysis; this only draws what it
         # publishes, so nothing here can affect playback.
-        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+        self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu,
+                                       frame_rate=self._meter_frame_rate,
+                                       mode=self._meter_mode)
 
         # render main menu
         self.volumioQ.put({'button': 'menu'})
@@ -135,6 +150,7 @@ class MenuManager:
                         # than its own toggle means the user wants the menu back.
                         if action != 'btn_dimmer_long' and self._meter_active():
                             self._level_meter.stop()
+                            self._meter_auto = False
                         self.menuAccessTime = datetime.now()
                         if self._suppressed_info is not None:
                             self._defer_info(self._suppressed_info)
@@ -148,9 +164,8 @@ class MenuManager:
                         self.build_menu(queueItem['menu'], queueItem.get('remember', True),
                                         queueItem.get('play_all'))
                 elif 'info' in queueItem:
-                    # An explicitly requested info update (info button) must show
-                    # immediately; only automatic pushState updates are deferred
-                    # while the user is scrolling the menu.
+                    # Info button shows now; automatic updates defer while
+                    # the user is scrolling.
                     if queueItem.get('force'):
                         if self._info_release_timer is not None:
                             self._info_release_timer.cancel()
@@ -174,6 +189,11 @@ class MenuManager:
                     self.show_message(queueItem['message'],
                                       force=queueItem.get('force', False),
                                       persist=queueItem.get('persist', False))
+                elif 'playing' in queueItem:
+                    self._playing = queueItem['playing']
+                    if not self._playing and self._meter_auto:
+                        # An idle meter has nothing left to draw once paused.
+                        self._stop_auto_meter()
                 elif 'clear' in queueItem:
                     self.display_message("", clear=True)
                 else:
@@ -246,12 +266,18 @@ class MenuManager:
         rendering is paused -- see _meter_active.
         """
         if self._level_meter is None:      # not reached once run() has started
-            self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu)
+            self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu,
+                                           frame_rate=self._meter_frame_rate,
+                                           mode=self._meter_mode)
 
         if self._level_meter.running:
             self._level_meter.stop()
+            self._meter_auto = False
             logger.info("Level meter off")
         elif self._level_meter.start():
+            # Asked for explicitly, so it outlives the music: stopping playback
+            # won't dismiss it the way it dismisses an idle one.
+            self._meter_auto = False
             logger.info("Level meter on")
 
     def _meter_active(self) -> bool:
@@ -380,51 +406,71 @@ class MenuManager:
         self._idle_timer.start()
 
     def _on_menu_idle(self) -> None:
+        """Fall back to a resting display 30s after the last control input.
+
+        The meter while something plays, the track or menu otherwise. Nothing is
+        re-armed: the next control press dismisses it and restarts the timer.
+        """
         self._idle_timer = None
+
+        if self._playing and self._level_meter is not None and not self._meter_active():
+            # Quiet: nobody asked for the meter, so a missing cava must not put
+            # an error over whatever is currently on screen.
+            if self._level_meter.start(announce=False):
+                self._meter_auto = True
+                logger.info("Level meter on (idle)")
+                return
+
         self.volumioQ.put({'show': 'info'})
 
-    def display_message(self, message, clear=False, static=False, autoscroll=False, force=False):
-        # The level meter has the display; a background track-info or toast
-        # update would otherwise paint straight over it.
+    def _stop_auto_meter(self) -> None:
+        """Dismiss an idle-started meter and show what's playing instead.
+
+        stop() re-renders the menu through its on_stop hook, so the info request
+        is what actually decides the screen: a paused track renders with "||",
+        while a genuine stop has no title and comes back as "No media is
+        playing", which reverts to the menu on its own.
+        """
+        self._meter_auto = False
         if self._meter_active():
-            return
-        # clear: clears the display and renders nothing after (for shutdown)
-        # static: leaves the message on screen with nothing rendering over it
-        # autoscroll: scrolls the message then leaves it on screen
-        # force: bypasses duplicate/rate suppression so the message always shows
-        # default: shows the message, then renders the menu after 2 seconds
+            self._level_meter.stop()
+        self.volumioQ.put({'show': 'info'})
+
+    def display_message(self, message, clear=False, autoscroll=False, force=False):
+        """Show a message on the LCD.
+
+        clear      blank the display afterwards (shutdown)
+        autoscroll scroll it, then leave it on screen
+        force      bypass duplicate/rate suppression
+        default    show it, then re-render the menu after 2 seconds
+        """
+        # The meter owns the display; a background toast would paint over it.
+        if self._meter_active():
+            return None
 
         self.messageTime = datetime.now()
-        lastMessageTime = (self.messageTime - self.lastMessageTime).total_seconds()
-
-        # check if message is a duplicate, or allow duplicates if last message was longer than 5 seconds ago
-        if force or (self.lastMessage != message and lastMessageTime > 2) or lastMessageTime > 5:
-            if self.menu is not None:
-                if clear == True:
-                    self.menu.message(message.upper())
-                    self.lastMessageTime = datetime.now()
-                    self._schedule_deferred(self.menu.clearDisplay)
-                    return
-                elif static == True:
-                    self._cancel_pending_render()
-                    self.lastMessageTime = datetime.now()
-                    self.lastMessage = message
-                    return self.menu.message(message.upper(), autoscroll=False)
-                elif autoscroll == True:
-                    self._cancel_pending_render()
-                    self.lastMessageTime = datetime.now()
-                    self.lastMessage = message
-                    return self.menu.message(message.upper(), autoscroll=True)
-                else:
-                    self.menu.message(message.upper())
-                    self.lastMessageTime = datetime.now()
-                    self.lastMessage = message
-                    self._schedule_deferred(self._render_menu)
-                    return
-
-            return self
-        else:
+        since_last = (self.messageTime - self.lastMessageTime).total_seconds()
+        # A repeat is allowed once the previous message has been up a while.
+        if not (force or (self.lastMessage != message and since_last > 2) or since_last > 5):
             logger.debug("Skipping duplicate message")
+            return None
+        if self.menu is None:
+            return self
+
+        self.lastMessageTime = datetime.now()
+        if clear:
+            self.menu.message(message.upper())
+            self._schedule_deferred(self.menu.clearDisplay)
+            return None
+
+        self.lastMessage = message
+        if autoscroll:
+            self._cancel_pending_render()
+            return self.menu.message(message.upper(), autoscroll=True)
+
+        self.menu.message(message.upper())
+        self._schedule_deferred(self._render_menu)
+        return None
 
 
     def show_track_info(self, payload: str) -> None:
@@ -503,11 +549,8 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu after a background refresh (remember=False, e.g. deleting
-        # the last favourite) navigates up to the parent instead of showing a
-        # stale list. Otherwise just tell the user and stay put. Checked before
-        # remember() so the back-button history isn't polluted, and forced past
-        # duplicate suppression since resolve_item usually just showed this title.
+        # An empty menu after a background refresh goes up to the parent rather
+        # than showing a stale list. Before remember(), to keep history clean.
         if not menu:
             if not remember:
                 previous = self.go_back()
@@ -525,9 +568,8 @@ class MenuManager:
         if self.menu is not None:
             self.menu.items = []
 
-        # Items arrive with every key present but possibly None, so `or ''`/`or 0`
-        # is needed rather than .get() defaults -- an unnamed Spotify playlist
-        # would otherwise crash the sort and abort the whole menu build.
+        # Keys are present but may be None, so `or 0` is needed rather than a
+        # .get() default -- an unnamed item would otherwise crash the sort.
         if menu and menu[0].get('position') is not None:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
@@ -539,11 +581,8 @@ class MenuManager:
         # parse menu
         counter = 0
 
-        # Offer to play the whole container, but only when the list actually
-        # holds playable items -- a list of sub-folders has nothing to play.
-        # Added before the loop so it takes position 0, which also keeps it
-        # first when this menu is restored from back-history (remember() saves
-        # each item's position and build_menu sorts by it).
+        # Only when the list holds something playable. Added before the loop so
+        # it takes position 0 and stays first when restored from history.
         if play_all_uri and any(not is_folder(i) for i in menu):
             logger.debug("Adding %s -> %s", PLAY_ALL_LABEL, play_all_uri)
             self.menu.append_item(
@@ -599,12 +638,9 @@ class MenuManager:
         logger.debug("item link: %s", button_link)
         logger.debug("item service: %s", button_service)
         self.display_message(button_name.lstrip('+'), autoscroll=True)
-        # The owning service travels with the item. Volumio routes addPlay by
-        # service name, and guessing it from the URI later gets it wrong (the
-        # Spotify plugin registers as "spop", not "spotify").
-        # The title travels with the item for the same reason the service does:
-        # Volumio's queue keeps whatever we send verbatim, and an item without a
-        # name shows as nothing playing everywhere -- VFD and web UI alike.
+        # Service and title both travel with the item: neither can be derived
+        # from the URI, and an untitled queue item reads as nothing playing.
+        # See NOTES.md ("Volumio quirks").
         self.volumioQ.put({'button': button_link, 'service': button_service,
                            'title': button_name.lstrip('+')})
 

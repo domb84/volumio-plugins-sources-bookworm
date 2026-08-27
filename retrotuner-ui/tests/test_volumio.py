@@ -47,6 +47,7 @@ def _volumio_with_mocked_schedule():
     v = Volumio.__new__(Volumio)
     v.last_core_state = None
     v._force_next_state = False
+    v._last_playing = None
     v.menuManagerQ = queue.Queue()
     v._schedule_info_update = Mock()
     return v
@@ -81,8 +82,60 @@ class TestPushStateDedup:
         v = _volumio_with_mocked_schedule()
         v._on_push_state({"status": "stop"})
         assert v._schedule_info_update.call_count == 0
-        item = v.menuManagerQ.get_nowait()
-        assert "message" in item
+        assert any("message" in item for item in _drain(v.menuManagerQ))
+
+
+def _drain(q):
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            return items
+
+
+class TestPlayStateIsPushed:
+    """The menu manager's idle timeout needs to know whether audio is playing.
+
+    It cannot infer it from the info payloads: a stop is reported down the
+    "no media" branch, which never reaches show_track_info, so the flag would
+    stay stuck on True forever.
+    """
+
+    def test_playing_is_announced(self):
+        v = _volumio_with_mocked_schedule()
+        v._on_push_state(_PLAY_STATE)
+        assert {"playing": True} in _drain(v.menuManagerQ)
+
+    def test_pause_counts_as_not_playing(self):
+        # The meter has nothing to draw while paused, so pause must read the
+        # same as stop here.
+        v = _volumio_with_mocked_schedule()
+        paused = dict(_PLAY_STATE, status="pause")
+        v._on_push_state(paused)
+        assert {"playing": False} in _drain(v.menuManagerQ)
+
+    def test_stop_counts_as_not_playing(self):
+        v = _volumio_with_mocked_schedule()
+        v._on_push_state({"status": "stop"})
+        assert {"playing": False} in _drain(v.menuManagerQ)
+
+    def test_an_unchanged_state_is_not_re_announced(self):
+        # Radio re-pushes the same state every few seconds; this would be pure
+        # queue traffic.
+        v = _volumio_with_mocked_schedule()
+        v._on_push_state(_PLAY_STATE)
+        _drain(v.menuManagerQ)
+        v._on_push_state(dict(_PLAY_STATE))
+        assert not [i for i in _drain(v.menuManagerQ) if "playing" in i]
+
+    def test_a_change_back_is_announced_again(self):
+        v = _volumio_with_mocked_schedule()
+        v._on_push_state(_PLAY_STATE)
+        v._on_push_state(dict(_PLAY_STATE, status="pause"))
+        _drain(v.menuManagerQ)
+        v._on_push_state(dict(_PLAY_STATE))
+        assert {"playing": True} in _drain(v.menuManagerQ)
 
 
 def _volumio_with_real_schedule():

@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from includes import api, controls, menu_manager, volumio
+from includes import api, controls, level_meter, menu_manager, volumio
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json")
@@ -14,9 +14,8 @@ CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("RetroTuner UI")
 
-# socket.io is chatty at INFO and engineio worse: it logs every packet, including
-# whole browse payloads, which buries our own lines. Neither is useful unless you
-# are debugging the Volumio connection itself.
+# Both log every packet at INFO, including whole browse payloads, which buries
+# our own lines.
 logging.getLogger("socketio").setLevel(logging.WARNING)
 logging.getLogger("engineio").setLevel(logging.WARNING)
 
@@ -96,6 +95,24 @@ def load_button_skip_config(config_data: Dict[str, Any]) -> Dict[str, Tuple[str,
     }
 
 
+def parse_meter_mode(config_data: Dict[str, Any]) -> str:
+    """Read the level meter layout, falling back through the setting it replaced.
+
+    index.js migrates meter_stereo to meter_mode on plugin start, so this only
+    matters for a config that has not been through that yet -- a hand-edited
+    file, or the python service winning the race on a first start after an
+    update. Cheap enough to be worth not showing the wrong layout over.
+    """
+    mode = config_data.get("meter_mode", {}).get("value")
+    if mode in level_meter.SUPPORTED_MODES:
+        return mode
+    if mode is not None:
+        logger.warning("Unknown meter_mode %r; falling back", mode)
+    if bool(config_data.get("meter_stereo", {}).get("value", False)):
+        return level_meter.MODE_STEREO
+    return level_meter.MODE_MONO
+
+
 def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, threading.Thread, threading.Thread, threading.Thread]:
     buttons_clk = parse_int_field(config_data, "buttons_clk")
     buttons_miso = parse_int_field(config_data, "buttons_miso")
@@ -117,6 +134,10 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     rot_enc_A = parse_int_field(config_data, "rot_enc_A")
     rot_enc_B = parse_int_field(config_data, "rot_enc_B")
     rotary_skip_track = parse_optional_bool_field(config_data, "rotary_skip_track", False)
+    # Half of one setting: index.js rewrites cava's framerate to match on save.
+    meter_frame_rate = parse_optional_int_field(
+        config_data, "meter_framerate", level_meter.FRAMES_PER_SECOND)
+    meter_mode = parse_meter_mode(config_data)
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -151,14 +172,15 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         button_hysteresis=button_hysteresis,
     )
 
-    # Each worker is constructed here (cheap, no I/O) and its run() is the
-    # thread entry point, so hardware and network are claimed on the thread that
-    # owns them.
+    # Constructed here (no I/O), run() is the thread entry point -- so hardware
+    # and sockets are claimed on the thread that owns them.
     controls_worker = controls.Controls(control_queue, config, stop_event)
     menu_worker = menu_manager.MenuManager(
         control_queue, volumio_queue, menu_manager_queue,
         lcd_rs, lcd_e, lcd_d4, lcd_d5, lcd_d6, lcd_d7, stop_event,
         rotary_skip_track=rotary_skip_track,
+        meter_frame_rate=meter_frame_rate,
+        meter_mode=meter_mode,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 

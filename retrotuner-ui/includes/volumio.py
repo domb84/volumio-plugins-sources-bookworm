@@ -8,35 +8,22 @@ logger = logging.getLogger("Volumio Functions")
 
 _INFO_DEBOUNCE_SECONDS = 0.4
 
-# How long after a favourite removal to wait before re-browsing the current
-# list. Matches the toast display time so the "removed" message is shown before
-# the rebuilt menu renders over it.
+# Matches the toast display time, so "removed" is seen before the rebuilt menu
+# renders over it.
 _REMOVE_REFRESH_DELAY_SECONDS = 2.0
 
-# Synthetic menu entry that plays a whole container. The container URI is
-# carried in the entry itself rather than read from _last_browse_uri at press
-# time, so a menu restored from back-history still plays the right thing.
+# Synthetic "play the whole container" entry. The URI travels in the entry
+# itself, so a menu restored from back-history still plays the right thing.
 PLAYALL_URI_PREFIX = 'system://playall/'
 PLAYALL_NO_SERVICE = '-'
 
-# Volumio item types that represent a playable container -- something whose
-# contents can be queued as a whole. Services all invent their own URI schemes
-# (spotify:playlist:, volusonic/track/<id>, podcast/<id>/<ep>, recently_added/
-# window/90d), so no URI pattern generalises; the type is the only shared
-# signal, and plugins across the ecosystem use this same vocabulary.
-#
-# Categories are excluded on purpose: they are navigation rather than content,
-# and asking a service to explode one ranges from a harmless no-op to a hang --
-# the Spotify plugin's explodeUri falls through to an else-branch that never
-# resolves its promise. Its own containers are safe here: every Spotify item
-# typed 'folder' or 'playlist' carries a real entity URI, while the one
-# unexplodable shape (spotify/category/<id>) is typed 'streaming-category'.
+# Item types whose contents can be queued as a whole. No URI pattern
+# generalises across services, so the type is the only shared signal.
+# Categories are excluded deliberately -- see NOTES.md ("Volumio quirks").
 CONTAINER_TYPES = ('playlist', 'album', 'artist', 'folder')
 
-# Cap on the remembered uri -> (type, service) map. It accumulates rather than
-# tracking just the current listing (see _remember_browse_kinds), so it needs a
-# bound; an evicted entry is simply re-learned the next time its listing is
-# browsed.
+# The uri -> (type, service) map accumulates rather than tracking one listing,
+# so it needs a bound. An evicted entry is re-learned on the next browse.
 BROWSE_KIND_CACHE_MAX = 2000
 
 # set socketio logging
@@ -57,6 +44,13 @@ class Volumio:
     WEBRADIO_URI_REGEX = re.compile(r'^https?:\/\/.+\/.+')
     SPOTIFY_TRACK_REGEX = re.compile(r'^spotify:track:.+')
 
+    SLEEP_MINUTES = (15, 30, 45, 60)
+
+    # The only fields of Volumio's state the display uses.
+    STATE_KEYS = ('status', 'artist', 'title', 'album', 'uri', 'service',
+                  'bitrate', 'samplerate', 'bitdepth', 'channels')
+    DEDUP_KEYS = ('status', 'title', 'artist', 'album', 'uri', 'service')
+
     def __init__(self, volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', stop_event=None):
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
@@ -66,6 +60,7 @@ class Volumio:
         self._pending_info_timer = None
         self._pending_info_lock = threading.Lock()
         self._force_next_state = False  # next pushState was explicitly requested (info button)
+        self._last_playing = None       # last play/not-play we told the menu manager about
         self._last_browse_uri = None    # uri of the list currently on screen (for post-removal refresh)
         self._refresh_browse = False    # next pushBrowseLibrary replaces the menu without history
         self._refresh_timer = None      # pending post-removal refresh timer
@@ -155,145 +150,100 @@ class Volumio:
             self.get_state()
             logger.debug("%s", item)
 
+    @staticmethod
+    def _menu_payload(*titles_and_uris):
+        """A menu payload from (title, uri) pairs, positions assigned in order."""
+        return json.dumps([
+            {'title': title, 'uri': uri, 'service': None, 'type': None, 'position': i}
+            for i, (title, uri) in enumerate(titles_and_uris)
+        ])
+
+    def _show_sleep_menu(self):
+        items = [('%d Minutes' % m, 'system://sleep/%d' % m) for m in self.SLEEP_MINUTES]
+        items.append(('Cancel Timer', 'system://sleep/cancel'))
+        self.menuManagerQ.put({'menu': self._menu_payload(*items)})
+
+    def _show_confirm_menu(self, label, uri):
+        self.menuManagerQ.put({'menu': self._menu_payload(
+            (label, uri), ('Cancel', 'system://cancel'))})
+
+    def _set_sleep_and_refresh(self, minutes):
+        self.set_sleep(minutes)
+        self._return_to_fresh_config()
+
+    def _cancel_sleep_and_refresh(self):
+        self.cancel_sleep()
+        self._return_to_fresh_config()
+
+    def _cancel_sleep_and_rebuild_config(self):
+        self.cancel_sleep()
+        self._build_config_menu(remember=False)
+
+    def _cancel_sleep_with_message(self):
+        self.cancel_sleep()
+        msg = json.dumps([{'type': None, 'title': None, 'message': 'Sleep timer cancelled'}])
+        self.menuManagerQ.put({'message': msg, 'force': True})
+
+    def _button_actions(self):
+        """Exact-match button handlers, rebuilt per call so tests can patch them."""
+        actions = {
+            'stop': self.stop,
+            'stop_and_clear': self.stop,
+            'toggle': lambda: self._send('toggle'),
+            'next': lambda: self._send('next'),
+            'prev': lambda: self._send('prev'),
+            'system://config': self._build_config_menu,
+            'system://wifi': lambda: self._send('getInfoNetwork'),
+            'system://sleep': self._show_sleep_menu,
+            'system://sleep/cancel': self._cancel_sleep_and_refresh,
+            'system://sleep/cancel/direct': self._cancel_sleep_with_message,
+            'system://sleep/cancel/refresh_config': self._cancel_sleep_and_rebuild_config,
+            'system://shutdown':
+                lambda: self._show_confirm_menu('Confirm Shutdown', 'system://shutdown/confirm'),
+            'system://restart':
+                lambda: self._show_confirm_menu('Confirm Restart', 'system://restart/confirm'),
+            'system://shutdown/confirm': lambda: self._send('shutdown'),
+            'system://restart/confirm': lambda: self._send('reboot'),
+            'system://cancel': lambda: self.menuManagerQ.put({'go_back': True}),
+            'system://noop': lambda: None,
+        }
+        for minutes in self.SLEEP_MINUTES:
+            actions['system://sleep/%d' % minutes] = (
+                lambda m=minutes: self._set_sleep_and_refresh(m))
+        return actions
+
     def _process_button_item(self, button: str, service: Optional[str] = None,
                              title: Optional[str] = None):
+        logger.debug("%s", button)
+
         if button == 'menu':
             self._last_browse_uri = None
             self.get_browse_sources()
-            logger.debug("%s", button)
             return
 
         if self.STREAM_URI_REGEX.match(button):
             self.play(button, service, title)
-            logger.debug("%s", button)
             return
 
         if self.BROWSE_URI_REGEX.match(button):
             self.get_sources(button)
-            logger.debug("%s", button)
             return
 
-        if button == 'stop':
-            self.stop()
-            logger.debug("%s", button)
-            return
-
-        if button == 'stop_and_clear':
-            self.stop()
-            logger.debug("%s", button)
-            return
-
-        if button == 'toggle':
-            self._send('toggle')
-            logger.debug("%s", button)
-            return
-
-        if button == 'next':
-            self._send('next')
-            logger.debug("%s", button)
-            return
-
-        if button == 'prev':
-            self._send('prev')
-            logger.debug("%s", button)
-            return
-
-        if self.SAFE_MENU_ITEM_REGEX.match(button):
-            self.get_sources(button)
-            logger.debug("%s", button)
+        # Before SAFE_MENU_ITEM_REGEX below: "stop", "next" and "prev" all match
+        # it, and would otherwise be browsed for instead of acted on.
+        action = self._button_actions().get(button)
+        if action is not None:
+            action()
             return
 
         if button.startswith(PLAYALL_URI_PREFIX):
-            # "<service>/<container uri>" -- the container may itself contain
-            # slashes, service names never do, so split on the first only.
+            # The container may contain slashes, service names never do.
             service, _, container = button[len(PLAYALL_URI_PREFIX):].partition('/')
             self.play_all(container, None if service == PLAYALL_NO_SERVICE else service)
             return
 
-        if button == 'system://config':
-            self._build_config_menu()
-            return
-
-        if button == 'system://wifi':
-            self._send('getInfoNetwork')
-            return
-
-        if button == 'system://sleep':
-            sleep_menu = [
-                {'title': '15 Minutes',   'uri': 'system://sleep/15',     'service': None, 'type': None, 'position': 0},
-                {'title': '30 Minutes',   'uri': 'system://sleep/30',     'service': None, 'type': None, 'position': 1},
-                {'title': '45 Minutes',   'uri': 'system://sleep/45',     'service': None, 'type': None, 'position': 2},
-                {'title': '60 Minutes',   'uri': 'system://sleep/60',     'service': None, 'type': None, 'position': 3},
-                {'title': 'Cancel Timer', 'uri': 'system://sleep/cancel', 'service': None, 'type': None, 'position': 4},
-            ]
-            self.menuManagerQ.put({'menu': json.dumps(sleep_menu)})
-            return
-
-        if button == 'system://sleep/15':
-            self.set_sleep(15)
-            self._return_to_fresh_config()
-            return
-
-        if button == 'system://sleep/30':
-            self.set_sleep(30)
-            self._return_to_fresh_config()
-            return
-
-        if button == 'system://sleep/45':
-            self.set_sleep(45)
-            self._return_to_fresh_config()
-            return
-
-        if button == 'system://sleep/60':
-            self.set_sleep(60)
-            self._return_to_fresh_config()
-            return
-
-        if button == 'system://sleep/cancel':
-            self.cancel_sleep()
-            self._return_to_fresh_config()
-            return
-
-        if button == 'system://sleep/cancel/direct':
-            self.cancel_sleep()
-            msg = json.dumps([{'type': None, 'title': None, 'message': 'Sleep timer cancelled'}])
-            self.menuManagerQ.put({'message': msg, 'force': True})
-            return
-
-        if button == 'system://sleep/cancel/refresh_config':
-            self.cancel_sleep()
-            self._build_config_menu(remember=False)
-            return
-
-        if button == 'system://shutdown':
-            confirm_menu = [
-                {'title': 'Confirm Shutdown', 'uri': 'system://shutdown/confirm', 'service': None, 'type': None, 'position': 0},
-                {'title': 'Cancel',           'uri': 'system://cancel',           'service': None, 'type': None, 'position': 1},
-            ]
-            self.menuManagerQ.put({'menu': json.dumps(confirm_menu)})
-            return
-
-        if button == 'system://restart':
-            confirm_menu = [
-                {'title': 'Confirm Restart', 'uri': 'system://restart/confirm', 'service': None, 'type': None, 'position': 0},
-                {'title': 'Cancel',          'uri': 'system://cancel',          'service': None, 'type': None, 'position': 1},
-            ]
-            self.menuManagerQ.put({'menu': json.dumps(confirm_menu)})
-            return
-
-        if button == 'system://cancel':
-            self.menuManagerQ.put({'go_back': True})
-            return
-
-        if button == 'system://noop':
-            return
-
-        if button == 'system://shutdown/confirm':
-            self._send('shutdown')
-            return
-
-        if button == 'system://restart/confirm':
-            self._send('reboot')
+        if self.SAFE_MENU_ITEM_REGEX.match(button):
+            self.get_sources(button)
             return
 
         logger.warning("Unhandled button item: %s", button)
@@ -392,46 +342,19 @@ class Volumio:
             # logger.debug("State: " + str(args))
             state = args[0]
 
-            status = state.get('status', None)
-            position = state.get('position', None)
-            title = state.get('title', None)
-            artist = state.get('artist', None)
-            album = state.get('album', None)
-            uri = state.get('uri', None)
-            trackType = state.get('trackType', None)
-            seek = state.get('seek', None)
-            duration = state.get('duration', None)           
-            bitrate = state.get('bitrate', None)
-            samplerate = state.get('samplerate', None)
-            bitdepth = state.get('bitdepth', None)            
-            channels = state.get('channels', None)            
-            random = state.get('random', None)            
-            repeatSingle = state.get('repeatSingle', None)            
-            consume = state.get('consume', None)            
-            volume = state.get('volume', None)            
-            dbVolume = state.get('dbVolume', None)            
-            mute = state.get('mute', None)            
-            disableVolumeControl = state.get('disableVolumeControl', None)            
-            stream = state.get('stream', None)            
-            updatedb = state.get('updatedb', None)            
-            volatile = state.get('volatile', None)            
-            service = state.get('service', None)
-
-            clean_state = {
-                'status': status,
-                'artist': artist,
-                'title': title,
-                'album': album,
-                'uri': uri,
-                'service': service,
-                'bitrate': bitrate,
-                'samplerate': samplerate,
-                'bitdepth': bitdepth,
-                'channels': channels
-            }
-
-            # normalise empty strings to None so downstream only has to check for None
+            # Empty strings normalise to None so downstream only checks for None.
+            # Not `or None`: that would swallow a legitimate 0 bitrate too.
+            clean_state = {key: state.get(key) for key in self.STATE_KEYS}
             clean_state = {k: (None if v == "" else v) for k, v in clean_state.items()}
+            status = clean_state['status']
+
+            # Drives the menu manager's idle screen. Decided here because a
+            # stop never reaches show_track_info. Pause counts as not playing;
+            # sent on change only, as radio re-pushes state constantly.
+            playing = status == 'play'
+            if playing != self._last_playing:
+                self._last_playing = playing
+                self.menuManagerQ.put({'playing': playing})
 
             # nothing is playing if neither artist nor title is set
             all_none = clean_state['artist'] is None and clean_state['title'] is None
@@ -447,10 +370,10 @@ class Volumio:
                 self.menuManagerQ.put({'message': message})
 
             else:
-                # Deduplicate on track text only (audio fields excluded) so a radio
-                # station re-sending the same track every few seconds -- even with
-                # a jittering bitrate -- doesn't re-render and restart the LCD scroll.
-                core_state = (status, title, artist, album, uri, service)
+                # Track text only, audio fields excluded: a radio station
+                # re-sending the same track with a jittering bitrate must not
+                # re-render and restart the LCD scroll.
+                core_state = tuple(clean_state[k] for k in self.DEDUP_KEYS)
 
                 # wire format is a list of one
                 result = json.dumps([clean_state])
@@ -477,17 +400,12 @@ class Volumio:
 
     def _schedule_info_update(self, result: str, immediate: bool = False,
                               only_if_pending: bool = False) -> None:
-        """Debounce rapid successive pushState calls for the same track.
+        """Debounce rapid pushState calls for the same track.
 
-        Volumio often sends an initial state without audio details, then the
-        same state again moments later with bitrate/samplerate filled in.
-        Holding the update briefly and replacing it if a richer one arrives
-        means only the final message reaches the display.
-
-        ``immediate`` sends straight away with a ``force`` flag, skipping the
-        scroll-idle deferral (an explicit info-button request). ``only_if_pending``
-        applies only if an earlier update is still waiting to be shown, so late
-        audio details fold into it without restarting an already-visible scroll.
+        Volumio sends state without audio details, then again with them; holding
+        the update briefly means only the final one reaches the display.
+        ``immediate`` skips the wait (info button); ``only_if_pending`` folds
+        late details into an update not yet shown, without restarting a scroll.
         """
         with self._pending_info_lock:
             if only_if_pending and self._pending_info_timer is None:
@@ -567,10 +485,8 @@ class Volumio:
         self._remember_browse_kinds(sources_list)
         result = json.dumps(sources_list)
         logger.debug("%s", result)
-        # Volumio emits a spurious empty pushBrowseLibrary right after
-        # removeFromFavourites. If the refresh timer is still pending, this
-        # isn't the real re-browse yet -- ignore it and let the timer fetch the
-        # actual list. Real content means the timer is now redundant, so cancel it.
+        # Volumio emits a spurious empty push after removeFromFavourites; while
+        # the refresh timer is pending that is not the real re-browse.
         if not sources_list and self._refresh_timer is not None:
             logger.debug("Ignoring spurious empty pushBrowseLibrary while refresh timer is pending")
             return
@@ -593,11 +509,8 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
-        # menu_manager only sorts by position when the *first* item has one (see
-        # build_menu); otherwise it falls back to an alphabetical sort, where
-        # "Configuration" lands early regardless of its own position. Volumio's
-        # source list carries no positions of its own, so backfill one for every
-        # item (preserving arrival order) purely to force the position-sort path.
+        # Backfilled in arrival order purely to force build_menu's position-sort
+        # path; without it the list sorts alphabetically. See NOTES.md.
         if not any(item.get('position') is not None for item in sources_list):
             for index, item in enumerate(sources_list):
                 item['position'] = index
@@ -612,15 +525,8 @@ class Volumio:
     def _remember_browse_kinds(self, sources_list) -> None:
         """Record what each listed item is, so entering one tells us its type.
 
-        Volumio reports an item's type only in the listing that contains it; by
-        the time we are inside it that listing is gone, so it has to be captured
-        on the way past.
-
-        Accumulated, never replaced. The back button restores menus from
-        menu_manager's history without re-browsing, so the listing that told us
-        about an item may never arrive again -- replacing the map meant that
-        leaving a playlist and re-entering it lost the fact that it was a
-        playlist, and Play All vanished until the user returned to the main menu.
+        Accumulated, never replaced -- the back button restores menus without
+        re-browsing, so a listing may never arrive again. See NOTES.md.
         """
         for item in sources_list:
             uri = item.get('uri')
@@ -700,10 +606,7 @@ class Volumio:
         self._send('removeFromFavourites', {'uri': link, 'title': title, 'service': service})
 
     def search(self, title: str, link: str, service: str, playlist: Optional[str] = None) -> None:
-        # TODO:
-        # this feature does not work as search query is not documented
-        # https://volumio.github.io/docs/API/WebSocket_APIs.html
-        # https://community.volumio.org/t/rest-api-uri-for-browsing/10671
+        # TODO: does not work -- the query format is undocumented. See NOTES.md.
         logger.debug(f"Search for {title} from {link} in {service}")
         if playlist:
             self._send('search', {'uri':link, 'title':title, 'service':service, 'playlist':playlist})
@@ -715,19 +618,10 @@ class Volumio:
              title: Optional[str] = None) -> None:
         """Queue and play a single track.
 
-        `service` comes from the menu item itself. Volumio routes addPlay by
-        service name, so guessing it from the URI is guessing: the Spotify
-        plugin registers as "spop", and asking for "spotify" names a service
-        that does not exist.
-
-        `title` matters more than it looks. CorePlayQueue.addQueueItems passes
-        the whole payload to the owning service's explodeUri, and for a plain
-        stream URL webradio's implementation is a pass-through -- it sets
-        `data.name = data.title` and resolves the object unchanged. Send no
-        title and the queue item has no name, which is why playback worked but
-        both the web UI and the info button showed nothing: the state machine
-        builds its state from the queue item, not from MPD. The web UI never
-        hits this because it sends the entire browse item.
+        Both `service` and `title` come from the menu item and both matter:
+        service names cannot be guessed from a URI, and an untitled queue item
+        reads as "nothing playing" everywhere while the audio plays fine. See
+        NOTES.md ("Volumio quirks").
         """
         if not service:
             # Only reached for an item that arrived without one. Inferring from
@@ -751,14 +645,11 @@ class Volumio:
 
 
     def play_all(self, container_uri: str, service: Optional[str] = None) -> None:
-        """Replace the queue with everything in `container_uri` and start playing.
+        """Replace the queue with everything in `container_uri` and play.
 
-        Volumio expands the container server-side through the owning service's
-        explodeUri, so this one message enqueues the whole playlist/album/folder
-        instead of the single track the user happened to be sitting on. Whether
-        a URI is explodable was decided from its type when the entry was
-        offered; nothing generic can re-check it here, since every service uses
-        its own URI scheme.
+        Volumio expands it server-side via the owning service's explodeUri.
+        Whether a URI is explodable was decided from its type when the entry was
+        offered -- no URI pattern generalises, so it cannot be re-checked here.
         """
         if not container_uri:
             logger.warning("Play all called with no container uri")

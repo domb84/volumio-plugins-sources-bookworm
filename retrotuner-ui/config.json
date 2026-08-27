@@ -135,6 +135,14 @@
         "type": "text",
         "value": "7, 998-1023"
     },
+    "meter_framerate": {
+        "type": "number",
+        "value": "60"
+    },
+    "meter_mode": {
+        "type": "string",
+        "value": "mono"
+    },
     "debug_mode": {
         "type": "boolean",
         "value": false

@@ -23,7 +23,17 @@ uvicorn
 # Retry helper used by the Volumio client
 tenacity
 
-# LCD menu library (forked). Needs 2.2.0 or later for create_char() and
-# render_frame(), which the level meter uses -- against anything older it fails
-# at runtime with AttributeError rather than at install time.
+# LCD menu library (forked). Two hard requirements, neither of which pip can
+# check -- the fork's version is 2.2.0 both before and after the second one, so
+# an already-installed copy looks satisfied either way:
+#
+#   * create_char() and render_frame(), or the level meter dies at runtime with
+#     AttributeError rather than failing at install time
+#   * the render-performance work (merged in #6): a frame takes ~2.7ms to write
+#     instead of ~14ms. The meter defaults to 60fps and offers 120, which the
+#     older timing cannot serve -- it would sit at 84% of wall time mid-render
+#     and starve the SPI button polling.
+#
+# So when updating an existing install, force it: pip will otherwise see 2.2.0
+# and skip the reinstall.
 git+https://github.com/domb84/rpi-lcd-menu.git@master
