@@ -1,25 +1,8 @@
 """Spectrum display for a 16x2 HD44780-compatible VFD.
 
-Hidden beta feature, reached by long-pressing the dimmer button.
-
-All the signal processing is done by cava (see cava/retrotuner-cava.conf), which
-reads the raw audio tap and writes one line of 16 numbers per frame. This module
-only turns those numbers into characters, which is why there is no DSP here.
-
-That split is deliberate rather than lazy:
-
-  * cava holds the tap fifo open permanently. An unread fifo fills its 64kB
-    buffer in ~0.37s, at which point ALSA blocks on write and playback stops --
-    so whatever reads the tap must never pause. cava is a separate service, so
-    restarting this plugin (which happens on every settings save) cannot
-    interrupt audio.
-  * the FFT, log frequency scaling and falloff happen in C, not here, next to
-    the SPI button polling and under the same GIL.
-
-A true oscilloscope trace remains impossible on this hardware: the controller
-has only 8 user-definable glyphs, so at most 8 distinct pixel patterns can be on
-screen at once and a scope line needs a different one per column. Bars work
-because all 16 columns share the same glyph set.
+Draws the numbers cava publishes; all the signal processing is cava's. See
+NOTES.md ("Level meter") for the glyph budget that shapes everything here, and
+("cava") for why the analysis lives in a separate service.
 """
 import logging
 import os
@@ -46,26 +29,13 @@ MODE_ROWS_CENTRE = 'rows_centre'  # L grows up from the middle, R grows down
 SUPPORTED_MODES = (MODE_MONO, MODE_STEREO, MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
 SPLIT_MODES = (MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
 
-# Vertical steps per channel in the split modes, and the hard reason for it.
-#
-# Each channel gets one character row, so its bar is drawn inside a single cell
-# and needs its own glyph per height. One row grows downward from the top of the
-# cell and the other upward from the bottom, and those are different bitmaps --
-# a top-anchored bar is not an upside-down bottom-anchored one that the
-# controller could flip, because the controller cannot flip anything.
-#
-# That means two glyph sets out of the eight CGRAM slots that exist, so four
-# heights each. The trade against the full-height modes is deliberate and the
-# whole point of this layout: 16 frequency bands per channel instead of 8, paid
-# for with 4 amplitude steps instead of 16.
+# Height steps per channel in the split modes: two glyph sets (one growing up,
+# one down) share the 8 CGRAM slots, so four each. See NOTES.md.
 SPLIT_LEVELS = 4
 SPLIT_CELL_STEP = CELL_ROWS // SPLIT_LEVELS   # pixel rows added per level
 
-# CGRAM glyph codes. 0-7 are the only slots the HD44780 has; note 0x0A would be
-# "\n", which lcd_render() treats as a line break, so staying inside 0-7 keeps
-# frames safe to build as ordinary strings.
-#
-# The two split sets are disjoint, so both fit in CGRAM at the same time.
+# 0-7 are the only CGRAM slots there are, and staying inside them also keeps
+# 0x0A ("\n", a line break to lcd_render) out of frames.
 BAR_GLYPHS = tuple(range(8))                  # full-height modes: heights 1..8
 SPLIT_UP_GLYPHS = tuple(range(0, 4))          # anchored to the bottom of the cell
 SPLIT_DOWN_GLYPHS = tuple(range(4, 8))        # anchored to the top of the cell
@@ -80,40 +50,26 @@ READ_CHUNK = 4096
 # something other than cava writing) growing the buffer forever.
 MAX_PENDING = 64 * 1024
 
-# Default draw rate. Must match "framerate" in cava/retrotuner-cava.conf, which
-# ships with the same value -- see the note there. Both are overridden together
-# from the plugin settings: index.js rewrites the cava config and index.py
-# passes the rate down here, so nothing reads these two once configured.
+# Default draw rate; must match "framerate" in cava/retrotuner-cava.conf. Both
+# are overridden together from the settings page.
 FRAMES_PER_SECOND = 60
 FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
 
-# Offered in the settings UI. A doubling series across the useful range: 15 is
-# the escape hatch if the meter ever competes with button polling, 120 is close
-# to what the display can be driven at -- a frame takes ~2.7ms to write, so 120
-# already spends a third of wall time mid-render for no more detail than 60
-# gives on a 16-step bar.
+# Offered in the settings UI. 15 is the escape hatch if the meter competes with
+# button polling; 120 is near what the display can be driven at.
 SUPPORTED_FRAME_RATES = (15, 30, 60, 120)
-# How long every bar must sit at zero before the display says so. Measured from
-# the last frame with any signal in it, so what you actually see is longer than
-# this: cava's bars fall gradually rather than cutting out, and those few seconds
-# of decay count as sound. At 2.0 the notice appeared after roughly five seconds
-# of quiet; expect this to read as about thirteen.
-#
-# Erring long is deliberate. Between tracks, during a quiet passage, or while a
-# stream rebuffers, the audio really has stopped -- but saying "NO AUDIO" and
-# then snapping back to bars a moment later is worse than simply showing an
-# empty meter for a while.
+# Quiet time before the display says "NO AUDIO". Measured from the last frame
+# with any signal, and cava's decay counts as signal, so what you see is a few
+# seconds longer. Erring long: a false alarm between tracks is worse than an
+# empty meter.
 SILENCE_TIMEOUT = 10.0
 
 
 def frame_interval(frame_rate):
-    """Seconds per frame for ``frame_rate``, falling back to the default.
+    """Seconds per frame, falling back to the default on a nonsense setting.
 
-    Deliberately tolerant. The rate arrives from a settings file that can be
-    hand-edited or left behind by an older version, and a bad value here would
-    either divide by zero or spin the draw loop flat out against the display --
-    neither is worth crashing the meter over, let alone taking down the thread
-    that also owns the menu.
+    Tolerant because the value comes from a hand-editable file, and zero or
+    negative would divide by zero or spin the draw loop against the display.
     """
     try:
         rate = int(frame_rate)
@@ -140,13 +96,8 @@ def bar_bitmaps():
 
 
 def split_bitmaps():
-    """The 8 CGRAM glyphs for the split modes: 4 anchored down, 4 anchored up.
-
-    Slots 0-3 are bars rising from the bottom of the cell, 4-7 the same heights
-    hanging from the top. Both sets are needed at once because the two rows grow
-    towards each other (or away from each other), and the controller has no way
-    to mirror a glyph.
-    """
+    """The 8 split-mode glyphs: slots 0-3 rise from the bottom, 4-7 hang from
+    the top. Both sets are resident because the controller cannot mirror one."""
     glyphs = []
     for height in range(SPLIT_CELL_STEP, CELL_ROWS + 1, SPLIT_CELL_STEP):
         glyphs.append([0b00000] * (CELL_ROWS - height) + [0b11111] * height)
@@ -158,14 +109,9 @@ def split_bitmaps():
 def split_channels(levels):
     """Split one cava stereo frame into (left, right) columns.
 
-    cava emits the two channels as one array laid out for a mirrored display:
-    the first half is the left channel running high frequency to low, so that
-    bass meets in the centre, and the second half is the right channel the usual
-    way round. Reversing the first half puts both channels back into low-to-high
-    order, which is what a row of its own wants.
-
-    If the display comes out with the channels swapped or the spectrum running
-    backwards, this is the only place that decides it.
+    cava sends the left channel first and reversed, for a mirrored display; this
+    puts both back in low-to-high order. If the channels come out swapped or the
+    spectrum runs backwards, this is the only place that decides it.
     """
     half = len(levels) // 2
     if half == 0:
@@ -174,14 +120,11 @@ def split_channels(levels):
 
 
 def render_split(left, right, from_edges):
-    """Build a frame with one channel per row, each drawn inside a single cell.
+    """Build a frame with one channel per row, left on top.
 
-    ``from_edges`` picks which way the bars grow. True anchors zero at the outer
-    edges, so the left channel hangs down from the top and the right rises up
-    from the bottom and a loud signal closes the gap in the middle. False anchors
-    zero at the centre line, so both grow outwards towards the edges.
-
-    Only the glyph set each row uses changes between the two.
+    ``from_edges`` anchors zero at the outer edges, so the bars grow inwards and
+    a loud signal closes the gap in the middle; otherwise zero is the centre
+    line and they grow outwards. Only the glyph set each row uses differs.
     """
     top_glyphs = SPLIT_DOWN_GLYPHS if from_edges else SPLIT_UP_GLYPHS
     bottom_glyphs = SPLIT_UP_GLYPHS if from_edges else SPLIT_DOWN_GLYPHS
@@ -199,15 +142,12 @@ def render_split(left, right, from_edges):
 def parse_bars(line, max_level=MAX_LEVEL, columns=LCD_COLUMNS):
     """Turn one line of cava raw ascii output into a list of column levels.
 
-    cava emits "3;7;12;16;..." with a trailing separator, and is configured with
-    ascii_max_range to match the display, so the values need no scaling. Short,
-    long or malformed lines are tolerated: a partially written line is normal
-    when reading a fifo that a separate process is appending to.
+    cava emits "3;7;12;16;..." with a trailing separator, already scaled to the
+    display by ascii_max_range. A partially written line is normal when reading
+    a file another process is appending to, so malformed fields are dropped
+    rather than losing the frame.
 
-    ``max_level`` and ``columns`` differ by mode: the full-height modes take 16
-    columns of 0..16, the split modes take 32 columns -- both channels -- of
-    0..4. Both mirror what the mode writes into cava's config, so neither end
-    scales anything.
+    ``max_level`` and ``columns`` differ by mode -- see the table in NOTES.md.
     """
     if not line:
         return []
@@ -281,10 +221,9 @@ class LevelMeter:
     def start(self, announce=True):
         """Start drawing. Returns True if the thread was started.
 
-        ``announce=False`` keeps a failed start silent. The idle timeout starts
-        the meter without being asked, so if cava happens to be down it must not
-        paint an error over whatever the user was last looking at -- a button
-        press, which did ask, still says why nothing happened.
+        ``announce=False`` keeps a failed start silent, for the idle timeout:
+        nobody asked for the meter, so a missing cava must not paint an error
+        over whatever was on screen.
         """
         if self.running:
             return False
@@ -322,12 +261,8 @@ class LevelMeter:
             return False
 
     def _load_glyphs(self):
-        """Fill CGRAM with the glyph set this mode draws from.
-
-        Loaded once per run rather than per frame: all 8 slots are rewritten,
-        and the mode cannot change without a settings save, which restarts the
-        service anyway.
-        """
+        """Fill CGRAM with this mode's glyph set. Once per run: the mode cannot
+        change without a settings save, which restarts the service."""
         if self._glyphs_loaded:
             return
         bitmaps = split_bitmaps() if self._split else bar_bitmaps()
@@ -358,13 +293,10 @@ class LevelMeter:
         showing_silence = False
         try:
             self._load_glyphs()
-            # Non-blocking: cava may not have opened its end yet, and a blocking
-            # open would hang the button press until it did.
-            #
-            # Read the raw descriptor rather than wrapping it in a file object:
-            # a non-blocking stream returns None when no data is ready, which
-            # TextIOWrapper.readline() cannot represent -- it raises or returns
-            # "" for "nothing yet", indistinguishable from end of stream.
+            # Non-blocking, and a raw descriptor rather than a file object: a
+            # blocking open would hang the button press until cava opened its
+            # end, and readline() cannot express "nothing yet" distinctly from
+            # end of stream.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
 
             while not self._stop.is_set():

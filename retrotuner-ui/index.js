@@ -9,10 +9,8 @@ var execSync = require('child_process').execSync;
 // restart (capture/settings save) apart from a genuine stop/shutdown.
 var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
-// SPI mode does nothing without this line enabling the kernel driver. Volumio's
-// node process can write this file directly -- gpio_button_led does the same --
-// so the line is added rather than merely reported, and the user is asked to
-// reboot, which is the only thing that loads the driver.
+// SPI does nothing without this line. Added rather than merely reported; only
+// a reboot loads the driver.
 var USERCONFIG_PATH = '/boot/userconfig.txt';
 var SPI_USERCONFIG_LINE = 'dtparam=spi=on';
 var SPI_USERCONFIG_COMMENT =
@@ -79,26 +77,18 @@ retrotunerui.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
-// Audio tap for the hidden level meter. cava reads this fifo and publishes the
-// analysed bars; the python service only draws them. Gated on the asound config
-// being present so the tap is never spliced into the output chain by accident.
+// Audio tap for the level meter. Gated on the asound config being present so
+// the tap is never spliced into the output chain by accident.
 var AUDIO_TAP_CONF = 'rt_in.rt_out.2.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
-// cava's own config. Its "framerate" and the python side's draw interval are two
-// halves of one setting -- cava caps how many distinct frames exist, the meter
-// caps how often one is drawn -- so the settings page writes both. This rewrites
-// the value in place rather than templating the file, because the rest of it
-// carries the notes explaining why each key is what it is.
+// cava's config, rewritten in place from the settings page rather than
+// templated, so the notes in it survive.
 var CAVA_CONF = 'cava/retrotuner-cava.conf';
 
-// Replace one key inside one [section] of an ini file, returning null if the key
-// was not found there.
-//
-// Section-aware on purpose: "channels" appears twice in cava's config -- once as
-// [input] channels = 2, the tap's channel count, and once as [output] channels =
-// mono|stereo, the display mode. A plain line match would rewrite the input one
-// and break the analyser's view of the audio entirely.
+// Replace one key inside one [section], or return null if it is not there.
+// Section-aware because "channels" appears in both [input] (the tap's channel
+// count) and [output] (the display mode), meaning different things.
 function replaceInIniSection(contents, sectionName, key, value) {
     const lines = contents.split('\n');
     const keyLine = new RegExp('^\\s*' + key + '\\s*=');
@@ -120,11 +110,8 @@ function replaceInIniSection(contents, sectionName, key, value) {
     return replaced ? lines.join('\n') : null;
 }
 
-// What each display mode needs from cava. The split layouts ask for both
-// channels at full width -- 32 bars, 16 per channel -- and for a range of 4,
-// because a channel confined to one character row has only four height steps
-// available (see SPLIT_LEVELS in includes/level_meter.py). Neither end scales
-// anything, so these have to match what the renderer expects.
+// What each display mode needs from cava. Must match what the renderer expects
+// -- neither end scales anything. See the table in NOTES.md.
 var METER_MODES = {
     mono:        { bars: 16, channels: 'mono',   range: 16 },
     stereo:      { bars: 16, channels: 'stereo', range: 16 },
@@ -132,9 +119,8 @@ var METER_MODES = {
     rows_centre: { bars: 32, channels: 'stereo', range: 4 }
 };
 
-// Human-readable names for the layout select, kept next to METER_MODES so the
-// two cannot drift. Also the source of the label getUIConfig hands back: a
-// select renders blank until it is given one.
+// Next to METER_MODES so the two cannot drift. A select renders blank until
+// getUIConfig hands it a label.
 var METER_MODE_LABELS = {
     mono:        'Mono - 16 bands, full height',
     stereo:      'Stereo mirrored - 8 bands per channel',
@@ -204,15 +190,9 @@ retrotunerui.prototype.setupAudioTap = function () {
         return false;
     }
 
-    // volumiofifo writes to the fifo but does not create it, so it has to exist
-    // before the ALSA config referencing it is applied (stylish_player does the
-    // same).
-    //
-    // Reuse an existing fifo rather than recreating it. This runs on every
-    // plugin start, and cava is typically already running by then -- a
-    // remove+mkfifo gives the path a new inode while cava keeps reading the old,
-    // now-unlinked one, which no writer can ever reach again. That is what made
-    // cava need restarting by hand before it would see any audio.
+    // volumiofifo writes the fifo but does not create it. Reuse an existing
+    // one: recreating gives the path a new inode while cava keeps reading the
+    // old, now-unlinked one, which no writer can ever reach.
     try {
         let usable = false;
         try {
@@ -257,14 +237,8 @@ retrotunerui.prototype.onStart = function() {
             '; a reboot is required before the MCP3008 can be read');
     }
 
-    // The cava config is reinstalled with its shipped default on every plugin
-    // update, while the chosen rate lives in config.json and survives. Reapply
-    // it here or the two silently diverge: cava analysing at one rate and the
-    // meter drawing at another, with nothing to report the mismatch.
-    // meter_stereo (a switch) became meter_mode (a select) when the split-row
-    // layouts arrived, and v-conf keeps whatever an existing install already
-    // wrote. Carry the old choice across once, then drop the dead key so this
-    // cannot fire again and overwrite a later choice.
+    // meter_stereo (a switch) became meter_mode (a select). Carry the old
+    // choice across once, then drop the dead key.
     if (self.config.has('meter_stereo')) {
         if (Boolean(self.config.get('meter_stereo')) &&
             String(self.config.get('meter_mode', 'mono')) === 'mono') {
@@ -274,6 +248,8 @@ retrotunerui.prototype.onStart = function() {
         self.config.delete('meter_stereo');
     }
 
+    // A plugin update reinstalls the cava config with its shipped defaults
+    // while config.json keeps the user's choice. Reapply or the two diverge.
     if (tapEnabled) {
         self.applyCavaSettings();
     }
@@ -306,15 +282,10 @@ retrotunerui.prototype.onRestart = function() {
     try { fs.writeFileSync(RESTART_MARKER_PATH, String(Date.now())); }
     catch (e) { self.logger.error('RetroTuner UI - could not write restart marker: ' + e); }
 
-    // Only restart our own service. Use 'start' (not 'restart') for pigpiod so a
-    // running daemon is left untouched — restarting it here races the controls'
-    // pigpio reconnect and leaves the rotary encoder dead until the next restart.
-    // Config changes never require pigpiod to restart.
-    //
-    // cava is deliberately left alone too, and for a sharper reason: it is the
-    // only reader of the audio tap, and bouncing it would leave the fifo unread
-    // long enough for ALSA to block and playback to stop. Settings saves restart
-    // this plugin routinely, so that would cut the music every time.
+    // 'start' not 'restart' for pigpiod: restarting races the controls' pigpio
+    // reconnect and leaves the rotary encoder dead. cava is left alone too --
+    // bouncing it stalls playback (NOTES.md, "Audio tap"), and settings saves
+    // come through here routinely.
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
@@ -436,11 +407,8 @@ retrotunerui.prototype.saveOptions = function (data) {
     const spiModeChanged = data.hasOwnProperty('spi') &&
         Boolean(data.spi) !== Boolean(self.config.get('spi'));
 
-    // Every field saved through this form is either a switch (spi, debug_mode)
-    // or a plain numeric setting (a GPIO pin or a rate) -- button mappings are
-    // only ever written by the capture flow (self.config.set() below), which
-    // bypasses this validation entirely, so no button-mapping grammar needs
-    // handling here.
+    // Switches, numbers, and the string selects declared above. Button
+    // mappings bypass this entirely -- the capture flow writes them directly.
     function isValid(key, value) {
         // A select posts a string. Rather than loosening this to accept any
         // string -- which would let a typo through into cava's config -- each
@@ -538,13 +506,9 @@ retrotunerui.prototype.saveOptions = function (data) {
         });
     }
 
-    // cava has to be bounced for a new framerate to take effect, and onRestart
-    // deliberately never touches it: cava is the only reader of the audio tap,
-    // and an unread fifo fills its 64kB buffer in ~0.37s, at which point ALSA
-    // blocks and playback stops. An explicit restart closes that gap far faster
-    // than the service's own RestartSec, so this is usually inaudible -- but the
-    // risk is real, which is why it is gated on the rate actually changing
-    // rather than running on every settings save.
+    // cava only reads these at startup, so it has to be bounced -- which
+    // onRestart never does, because an unread tap stalls playback. Gated on an
+    // actual change for that reason; usually inaudible, but not risk-free.
     if (meterChanged && !rebootPending) {
         if (self.applyCavaSettings()) {
             self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
