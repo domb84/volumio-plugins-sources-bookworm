@@ -1,4 +1,5 @@
 """Tests for includes/menu_manager.py: the restart-marker gate and menu building."""
+import inspect
 import json
 import os
 import queue
@@ -332,3 +333,89 @@ class TestDisplayWritesGoThroughTheLock:
                 if '.lcd.' in code:
                     offenders.append('%s:%d' % (path.name, number))
         assert not offenders, "writes past the display lock: %s" % offenders
+
+
+class TestIdleCountdownsAreArmedAtStartup:
+    """A plugin restart nobody touches must still reach the meter and the
+    screensaver. Both countdowns were armed only inside the control-action
+    branch, so an untouched restart sat on the menu forever."""
+
+    def test_run_arms_the_countdown_before_the_queue_loop(self):
+        # run() claims the display and then loops, so it cannot be called here.
+        # Merely finding the call is not enough: the control-action branch is
+        # inside run() too, and that one is reached only once a button has been
+        # pressed. What has to hold is that one happens before the loop starts.
+        source = inspect.getsource(mm.MenuManager.run)
+        armed = source.index("self._reset_idle_timer()")
+        loop = source.index("while not (self.stop_event")
+        assert armed < loop
+
+    def _manager(self, timeout=30.0, effect='wave'):
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._idle_timer = None
+        m._screensaver_timer = None
+        m._screensaver_timeout = timeout
+        m._screensaver_effect = effect
+        return m
+
+    def test_arming_the_idle_timer_also_arms_the_screensaver(self):
+        m = self._manager()
+        m._reset_idle_timer()
+        try:
+            assert m._idle_timer is not None
+            assert m._screensaver_timer is not None
+        finally:
+            m._idle_timer.cancel()
+            m._screensaver_timer.cancel()
+
+    def test_a_screensaver_set_to_none_arms_nothing(self):
+        m = self._manager(effect='none')
+        m._reset_screensaver_timer()
+        assert m._screensaver_timer is None
+
+    def test_a_zero_timeout_arms_nothing(self):
+        m = self._manager(timeout=0)
+        m._reset_screensaver_timer()
+        assert m._screensaver_timer is None
+
+    def test_re_arming_replaces_the_pending_timer(self):
+        # Otherwise every press leaves another timer running and the screensaver
+        # fires on the oldest one, however recently a button was pressed.
+        m = self._manager()
+        m._reset_screensaver_timer()
+        first = m._screensaver_timer
+        m._reset_screensaver_timer()
+        try:
+            assert m._screensaver_timer is not first
+            assert not first.is_alive() or first.finished.is_set()
+        finally:
+            m._screensaver_timer.cancel()
+
+
+class TestIdleFallsBackToTheScreensaver:
+    """The resting display when nothing is playing. The meter covers the playing
+    case, and by this point it has already claimed the display."""
+
+    def _manager(self, playing, meter_running=False):
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._screensaver_timer = Mock()
+        m._playing = playing
+        m._level_meter = Mock()
+        m._level_meter.running = meter_running
+        m._start_screensaver = Mock(return_value=True)
+        return m
+
+    def test_it_starts_when_nothing_is_playing(self):
+        m = self._manager(playing=False)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_called_once_with()
+
+    def test_it_stays_away_while_something_plays(self):
+        m = self._manager(playing=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()
+
+    def test_it_does_not_take_the_display_from_the_meter(self):
+        m = self._manager(playing=False, meter_running=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()

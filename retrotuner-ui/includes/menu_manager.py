@@ -111,6 +111,11 @@ class MenuManager:
         # render main menu
         self.volumioQ.put({'button': 'menu'})
 
+        # Both countdowns start here, not on the first button press: a plugin
+        # restart nobody touches would otherwise never reach the meter or the
+        # screensaver at all.
+        self._reset_idle_timer()
+
         # define control actions
         self.control_actions = {
             'menu_up': self._menu_up,
