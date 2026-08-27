@@ -48,4 +48,4 @@ tenacity
 #
 # TEMPORARY: pinned to the branch, not master, while the desync fix is being
 # tested on the device. Put this back to @master once it is merged.
-git+https://github.com/domb84/rpi-lcd-menu.git@fix-display-corruption
+git+https://github.com/domb84/rpi-lcd-menu.git
