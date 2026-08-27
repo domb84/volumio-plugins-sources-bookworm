@@ -15,13 +15,11 @@ logger = logging.getLogger("Level Meter")
 LCD_COLUMNS = 16
 LCD_ROWS = 2
 
-# Rows of pixels in one character cell. Two rows of cells give 16 vertical steps
-# per column, which is what cava's ascii_max_range is set to.
+# Pixel rows per character cell; two cells give the 16 steps cava's ascii_max_range sends.
 CELL_ROWS = 8
 MAX_LEVEL = CELL_ROWS * LCD_ROWS
 
-# Display modes. The first two stack both rows into one tall bar and differ only
-# in what cava sends; the "rows" pair give each channel a row of its own.
+# The first two stack both rows into one tall bar; the "rows" pair give each channel a row.
 MODE_MONO = 'mono'                # 16 bands, full height
 MODE_STEREO = 'stereo'            # cava mirrors L/R about the centre, 8 bands each
 MODE_ROWS_EDGES = 'rows_edges'    # L hangs from the top, R rises from the bottom
@@ -29,13 +27,11 @@ MODE_ROWS_CENTRE = 'rows_centre'  # L grows up from the middle, R grows down
 SUPPORTED_MODES = (MODE_MONO, MODE_STEREO, MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
 SPLIT_MODES = (MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
 
-# Height steps per channel in the split modes: two glyph sets (one growing up,
-# one down) share the 8 CGRAM slots, so four each. See NOTES.md.
+# Split modes need two glyph sets (one up, one down) in 8 CGRAM slots, so four each. See NOTES.md.
 SPLIT_LEVELS = 4
 SPLIT_CELL_STEP = CELL_ROWS // SPLIT_LEVELS   # pixel rows added per level
 
-# 0-7 are the only CGRAM slots there are, and staying inside them also keeps
-# 0x0A ("\n", a line break to lcd_render) out of frames.
+# The only CGRAM slots there are - and staying inside them keeps 0x0A ("\n") out of frames.
 BAR_GLYPHS = tuple(range(8))                  # full-height modes: heights 1..8
 SPLIT_UP_GLYPHS = tuple(range(0, 4))          # anchored to the bottom of the cell
 SPLIT_DOWN_GLYPHS = tuple(range(4, 8))        # anchored to the top of the cell
@@ -46,20 +42,16 @@ BAR_SEPARATOR = ';'
 
 # One frame is ~50 bytes, so this holds a healthy backlog without a big read.
 READ_CHUNK = 4096
-# Guard against a stream that never contains a newline (wrong output format, or
-# something other than cava writing) growing the buffer forever.
+# Bound on a stream that never sends a newline - wrong format, or not cava at all.
 MAX_PENDING = 64 * 1024
 
-# Default draw rate; must match "framerate" in cava/retrotuner-cava.conf. Both
-# are overridden together from the settings page.
+# Must match "framerate" in cava/retrotuner-cava.conf; the settings page sets both together.
 FRAMES_PER_SECOND = 60
 FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
 
-# Offered in the settings UI. 15 is the escape hatch if the meter competes with
-# button polling; 120 is near what the display can be driven at.
+# 15 is the escape hatch if the meter competes with button polling; 120 is near the display's ceiling.
 SUPPORTED_FRAME_RATES = (15, 30, 60, 120)
-# Quiet before "NO AUDIO". cava's decay counts as signal, so what you see is a
-# few seconds longer. Long on purpose: a false alarm between tracks is worse.
+# Quiet before "NO AUDIO", and long on purpose - a false alarm between tracks is worse.
 SILENCE_TIMEOUT = 10.0
 
 
@@ -261,15 +253,10 @@ class LevelMeter:
     def _resync_display(self):
         """Re-run the display's 4-bit handshake at a meter boundary.
 
-        The bus has no RW line, so the busy flag cannot be read and every delay
-        in the driver is a fixed guess. One that comes up short costs a nibble,
-        and from then on every byte is misassembled -- see NOTES.md ("Display
-        driver"). Nothing on this side can detect that has happened.
-
-        The library resyncs periodically on its own, so this is not the safety
-        net; it just covers the two moments most exposed to it, at the two
-        points where a lost frame costs nothing anyway: 60fps rendering about
-        to start, and the menu about to come back after it.
+        Not the safety net -- the library resyncs periodically on its own. This
+        covers the two moments most exposed to a desync, and where a lost frame
+        costs nothing: 60fps about to start, and the menu about to come back
+        after it. See NOTES.md ("Display driver").
         """
         resync = getattr(self._menu, 'resync_display', None)
         if resync is None:
@@ -314,8 +301,7 @@ class LevelMeter:
         try:
             self._resync_display()
             self._load_glyphs()
-            # Non-blocking so the button press cannot hang, and a raw fd
-            # because readline() cannot express "nothing yet" from end of file.
+            # Non-blocking, and a raw fd: readline() can't say "nothing yet" at end of file.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
 
             while not self._stop.is_set():
@@ -330,8 +316,7 @@ class LevelMeter:
                     if chunk:
                         pending += chunk
 
-                # Newest complete line, backlog discarded: a stale frame is
-                # worse than a skipped one.
+                # Newest complete line only - a stale frame is worse than a skipped one.
                 latest = None
                 if b'\n' in pending:
                     parts = pending.split(b'\n')
@@ -341,8 +326,7 @@ class LevelMeter:
                             latest = line.decode('ascii', 'replace')
                             break
 
-                # A stream with no newline is either not cava or badly broken;
-                # don't let the buffer grow without bound waiting for one.
+                # Not cava, or badly broken. Don't grow the buffer waiting for a newline.
                 if len(pending) > MAX_PENDING:
                     pending = b''
 
@@ -351,8 +335,7 @@ class LevelMeter:
                 if levels and any(levels):
                     last_sound = started
 
-                # One write per frame, and the notice is latched: drawing bars
-                # and queueing "NO AUDIO" over them flickers violently.
+                # One write per frame, notice latched: bars plus "NO AUDIO" over them flickers badly.
                 if started - last_sound > SILENCE_TIMEOUT:
                     if not showing_silence:
                         self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
@@ -372,9 +355,7 @@ class LevelMeter:
                     os.close(fd)
                 except Exception:
                     pass
-            # Before the menu is redrawn, not after: an hour of 60fps is the
-            # most likely thing to have desynced the bus, and a menu drawn onto
-            # a desynced bus is the "switching back does not help" symptom.
+            # Before the menu is redrawn: an hour of 60fps is what desyncs the bus. See NOTES.md.
             self._resync_display()
             if self._on_stop is not None:
                 try:

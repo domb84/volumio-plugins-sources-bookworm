@@ -16,17 +16,16 @@ logger = logging.getLogger("Menu Manager")
 _SCROLL_IDLE_SECONDS = 3.0
 _MENU_IDLE_SECONDS = 30.0
 
-# Written by index.js just before a self-triggered restart so we can tell a
-# restart (capture/settings save) apart from a genuine stop/shutdown.
+# Written by index.js before a self-triggered restart, to tell one apart from a real shutdown.
 _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 
 from rpilcdmenu import RpiLCDMenu, DisplayController
 from rpilcdmenu.items import FunctionItem
 
+from . import effects
 from .level_meter import FRAMES_PER_SECOND, MODE_MONO, LevelMeter
 
-# Plain ASCII -- the display has no arrow glyph. One chevron, not two:
-# rpilcdmenu adds ">" to the selected row, so this reads ">> PLAY ALL" in place.
+# One chevron, not two: rpilcdmenu prefixes ">" to the selected row, giving ">> PLAY ALL".
 PLAY_ALL_LABEL = '> Play All'
 
 class MenuManager:
@@ -34,15 +33,18 @@ class MenuManager:
 
     def __init__(self, controlQ: 'queue.Queue', volumioQ: 'queue.Queue', menuManagerQ: 'queue.Queue', lcdRS: int = 7, lcdE: int = 8, lcdD4: int = 25, lcdD5: int = 24, lcdD6: int = 23, lcdD7: int = 15, stop_event=None, rotary_skip_track: bool = False,
                  meter_frame_rate: int = FRAMES_PER_SECOND,
-                 meter_mode: str = MODE_MONO):
+                 meter_mode: str = MODE_MONO,
+                 boot_effect: str = effects.DEFAULT_BOOT_EFFECT,
+                 boot_line1: str = '', boot_line2: str = '',
+                 screensaver_effect: str = effects.DEFAULT_SCREENSAVER_EFFECT,
+                 screensaver_line1: str = '', screensaver_line2: str = '',
+                 screensaver_timeout: float = effects.DEFAULT_SCREENSAVER_TIMEOUT):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
         self.menuManagerQ = menuManagerQ
         self.stop_event = stop_event
         self._lcd_pins = (lcdRS, lcdE, lcdD4, lcdD5, lcdD6, lcdD7)
-        # Off by default: on some encoders, electrical noise registers as a
-        # turn even untouched, which is harmless as a stray menu-scroll but can
-        # unexpectedly skip/stop playback once enabled. See _menu_up/_menu_down.
+        # Off by default: encoder noise reads as a turn, harmless as a stray scroll but not as a skipped track.
         self._rotary_skip_track = rotary_skip_track
 
         # menu access times
@@ -59,28 +61,31 @@ class MenuManager:
         self._idle_timer: Optional[threading.Timer] = None
         self._current_context: Optional[str] = None
 
-        # True while the rotary scrolls the menu, False once the screen shows
-        # what's playing and it skips tracks instead. Only ever set alongside an
-        # actual LCD write, so it always matches what is on screen.
+        # True while the rotary scrolls the menu, False once it skips tracks instead. Only
+        # ever set alongside an LCD write, so it always matches what is on screen.
         self._nav_mode = True
 
-        # How fast the level meter redraws. Set from the plugin settings, which
-        # also rewrite cava's own framerate -- the two are halves of one setting.
+        # Meter redraw rate. The settings page rewrites cava's framerate too - halves of one setting.
         self._meter_frame_rate = meter_frame_rate
-        # Which layout the meter draws. Chosen alongside the rate, and paired
-        # with cava's bars/channels/ascii_max_range by index.js.
+        # Meter layout. index.js pairs it with cava's bars/channels/ascii_max_range.
         self._meter_mode = meter_mode
 
         # Hidden beta feature; built lazily so it costs nothing until used.
         self._level_meter = None
 
-        # Whether audio is playing, pushed by the Volumio worker on change. The
-        # idle timeout uses it to decide between the meter and the now-playing
-        # screen; pause and stop both count as not playing.
+        # Boot graphic, played once before the first menu render.
+        self._boot_effect = boot_effect
+        self._boot_lines = (boot_line1, boot_line2)
+        # Idle screen for when nothing is playing; the meter covers the playing case.
+        self._screensaver_effect = screensaver_effect
+        self._screensaver_lines = (screensaver_line1, screensaver_line2)
+        self._screensaver_timeout = screensaver_timeout
+        self._screensaver = None
+        self._screensaver_timer: Optional[threading.Timer] = None
+
+        # Pushed by the Volumio worker; picks the idle screen. Pause and stop both count as not playing.
         self._playing = False
-        # True only while the meter is up because the display went idle. A meter
-        # the user asked for by long-pressing the dimmer stays until they dismiss
-        # it, even if the music stops.
+        # True only for an idle-triggered meter; one the user asked for outlives the music.
         self._meter_auto = False
 
     def run(self):
@@ -95,10 +100,10 @@ class MenuManager:
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)
         self._display = DisplayController()
         self._display.on()
-        self.menu.message(('Initialising...').upper(), autoscroll=True)
+        if not self._play_boot_effect():
+            self.menu.message(('Initialising...').upper(), autoscroll=True)
 
-        # cava owns the audio tap and does the analysis; this only draws what it
-        # publishes, so nothing here can affect playback.
+        # cava owns the tap and the analysis; this only draws, so it cannot affect playback.
         self._level_meter = LevelMeter(self.menu, on_stop=self._render_menu,
                                        frame_rate=self._meter_frame_rate,
                                        mode=self._meter_mode)
@@ -146,8 +151,8 @@ class MenuManager:
                 if 'control' in queueItem:
                     action = queueItem['control']
                     if action in self.control_actions:
-                        # The meter owns the whole display, so any control other
-                        # than its own toggle means the user wants the menu back.
+                        # Both own the display while they run, so a press has to reclaim it.
+                        self._stop_screensaver()
                         if action != 'btn_dimmer_long' and self._meter_active():
                             self._level_meter.stop()
                             self._meter_auto = False
@@ -164,8 +169,7 @@ class MenuManager:
                         self.build_menu(queueItem['menu'], queueItem.get('remember', True),
                                         queueItem.get('play_all'))
                 elif 'info' in queueItem:
-                    # Info button shows now; automatic updates defer while
-                    # the user is scrolling.
+                    # Info button shows now; automatic updates defer while scrolling.
                     if queueItem.get('force'):
                         if self._info_release_timer is not None:
                             self._info_release_timer.cancel()
@@ -191,6 +195,13 @@ class MenuManager:
                                       persist=queueItem.get('persist', False))
                 elif 'playing' in queueItem:
                     self._playing = queueItem['playing']
+                    if self._playing:
+                        # Music started: the meter or the track is the better idle screen.
+                        self._stop_screensaver()
+                    else:
+                        # Playback stopping is itself the trigger, so the screensaver
+                        # still arrives if nobody touches a button again.
+                        self._reset_screensaver_timer()
                     if not self._playing and self._meter_auto:
                         # An idle meter has nothing left to draw once paused.
                         self._stop_auto_meter()
@@ -211,6 +222,7 @@ class MenuManager:
 
         # cleanup on exit
         logger.info('Menu manager stopping')
+        self._stop_screensaver()
         self._show_shutdown_message()
 
 
@@ -221,8 +233,6 @@ class MenuManager:
 
         for item in self.menu.items:
             menuItem = item.__getattribute__('args')
-            # logger.debug(item.__getattribute__('args'))
-            # Create a dictionary for the current item
             saveData = {
                 'position': menuItem[0],
                 'title': menuItem[1],
@@ -275,13 +285,48 @@ class MenuManager:
             self._meter_auto = False
             logger.info("Level meter off")
         elif self._level_meter.start():
-            # Asked for explicitly, so it outlives the music: stopping playback
-            # won't dismiss it the way it dismisses an idle one.
+            # Asked for explicitly, so stopping playback won't dismiss it the way it dismisses an idle one.
             self._meter_auto = False
             logger.info("Level meter on")
 
     def _meter_active(self) -> bool:
         return self._level_meter is not None and self._level_meter.running
+
+    def _screensaver_active(self) -> bool:
+        return self._screensaver is not None and self._screensaver.running
+
+    def _play_boot_effect(self) -> bool:
+        """Draw the boot graphic, blocking until it finishes.
+
+        On the menu thread on purpose: nothing else can usefully happen before
+        the first menu render, and a thread would race it onto the display.
+        """
+        effect = effects.boot_effect(self._boot_effect)
+        if effect is None:
+            return False
+        line1 = self._boot_lines[0] or effects.default_text()
+        player = effects.EffectPlayer(self.menu, effect, line1=line1,
+                                      line2=self._boot_lines[1],
+                                      display=self._display)
+        logger.info("Boot graphic: %s", effect.id)
+        return player.play()
+
+    def _start_screensaver(self) -> bool:
+        effect = effects.screensaver_effect(self._screensaver_effect)
+        if effect is None:
+            return False
+        line1 = self._screensaver_lines[0] or effects.default_text()
+        # on_stop redraws the menu, the same hook the meter uses to hand the display back.
+        self._screensaver = effects.EffectPlayer(
+            self.menu, effect, line1=line1, line2=self._screensaver_lines[1],
+            display=self._display, on_stop=self._render_menu)
+        return self._screensaver.start()
+
+    def _stop_screensaver(self) -> None:
+        if self._screensaver_active():
+            self._screensaver.stop()
+            logger.info("Screensaver off")
+        self._screensaver = None
 
     def _render_menu(self) -> None:
         """Re-render the current menu and restore the rotary encoder to nav mode.
@@ -377,6 +422,9 @@ class MenuManager:
             if self._idle_timer is not None:
                 self._idle_timer.cancel()
                 self._idle_timer = None
+            if self._screensaver_timer is not None:
+                self._screensaver_timer.cancel()
+                self._screensaver_timer = None
 
             self.menu.message("Shutting down...".upper())
             sleep(1.5)
@@ -404,6 +452,29 @@ class MenuManager:
         self._idle_timer = threading.Timer(_MENU_IDLE_SECONDS, self._on_menu_idle)
         self._idle_timer.daemon = True
         self._idle_timer.start()
+        self._reset_screensaver_timer()
+
+    def _reset_screensaver_timer(self) -> None:
+        """Re-arm the screensaver countdown. Longer than the menu idle timeout,
+        so the track or menu gets its turn on screen first."""
+        if self._screensaver_timer is not None:
+            self._screensaver_timer.cancel()
+            self._screensaver_timer = None
+        if self._screensaver_timeout <= 0 or self._screensaver_effect == effects.NONE:
+            return
+        self._screensaver_timer = threading.Timer(self._screensaver_timeout,
+                                                  self._on_screensaver_idle)
+        self._screensaver_timer.daemon = True
+        self._screensaver_timer.start()
+
+    def _on_screensaver_idle(self) -> None:
+        """Take the display for the screensaver. Not re-armed: the next press
+        dismisses it and restarts the countdown."""
+        self._screensaver_timer = None
+        # The meter is the idle screen while something plays, and it has already claimed the display.
+        if self._playing or self._meter_active():
+            return
+        self._start_screensaver()
 
     def _on_menu_idle(self) -> None:
         """Fall back to a resting display 30s after the last control input.
@@ -414,8 +485,7 @@ class MenuManager:
         self._idle_timer = None
 
         if self._playing and self._level_meter is not None and not self._meter_active():
-            # Quiet: nobody asked for the meter, so a missing cava must not put
-            # an error over whatever is currently on screen.
+            # Quiet: nobody asked for the meter, so a missing cava must not overwrite the screen.
             if self._level_meter.start(announce=False):
                 self._meter_auto = True
                 logger.info("Level meter on (idle)")
@@ -444,8 +514,8 @@ class MenuManager:
         force      bypass duplicate/rate suppression
         default    show it, then re-render the menu after 2 seconds
         """
-        # The meter owns the display; a background toast would paint over it.
-        if self._meter_active():
+        # The meter or screensaver owns the display; a background toast would paint over it.
+        if self._meter_active() or self._screensaver_active():
             return None
 
         self.messageTime = datetime.now()
@@ -549,8 +619,7 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu after a background refresh goes up to the parent rather
-        # than showing a stale list. Before remember(), to keep history clean.
+        # An empty refresh goes up to the parent, not a stale list. Before remember(), to keep history clean.
         if not menu:
             if not remember:
                 previous = self.go_back()
@@ -568,8 +637,7 @@ class MenuManager:
         if self.menu is not None:
             self.menu.items = []
 
-        # Keys are present but may be None, so `or 0` is needed rather than a
-        # .get() default -- an unnamed item would otherwise crash the sort.
+        # Keys are present but may be None, so `or 0`, not a .get() default - None crashes the sort.
         if menu and menu[0].get('position') is not None:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
@@ -581,8 +649,7 @@ class MenuManager:
         # parse menu
         counter = 0
 
-        # Only when the list holds something playable. Added before the loop so
-        # it takes position 0 and stays first when restored from history.
+        # Only if the list holds something playable. Before the loop, so it takes position 0.
         if play_all_uri and any(not is_folder(i) for i in menu):
             logger.debug("Adding %s -> %s", PLAY_ALL_LABEL, play_all_uri)
             self.menu.append_item(
@@ -628,8 +695,7 @@ class MenuManager:
         # A real menu is now on screen, so the rotary encoder scrolls it again.
         self._nav_mode = True
 
-        # return rendered menu
-        # if you do not return the menu it will render the original one again
+        # Must return the menu, or the original one is rendered again.
         return self.menu.render()
 
     def resolve_item(self, item_index: int, button_name: str, button_link: str, button_service: str) -> None:
@@ -638,20 +704,15 @@ class MenuManager:
         logger.debug("item link: %s", button_link)
         logger.debug("item service: %s", button_service)
         self.display_message(button_name.lstrip('+'), autoscroll=True)
-        # Service and title both travel with the item: neither can be derived
-        # from the URI, and an untitled queue item reads as nothing playing.
-        # See NOTES.md ("Volumio quirks").
+        # Service and title both travel with the item; an untitled queue item reads
+        # as nothing playing. See NOTES.md ("Volumio quirks").
         self.volumioQ.put({'button': button_link, 'service': button_service,
                            'title': button_name.lstrip('+')})
 
 
     def dimmer(self):
-        # Through the menu, not menu.lcd. The library serialises every display
-        # write on a lock its own worker thread also holds; reaching past that
-        # to the driver puts a second writer on the 4-bit data pins, and two
-        # writers desync the bus for good -- see NOTES.md ("Display driver").
-        # The dimmer button itself goes via _display.toggle() (the socket,
-        # also locked); this stays for anything driving the menu directly.
+        # Through the menu, not menu.lcd: reaching past the library's lock puts a second
+        # writer on the data pins and desyncs the bus. See NOTES.md ("Display driver").
         self.menu.toggle_display()
 
 

@@ -143,6 +143,34 @@
         "type": "string",
         "value": "mono"
     },
+    "boot_effect": {
+        "type": "string",
+        "value": "splitflap"
+    },
+    "boot_line1": {
+        "type": "text",
+        "value": ""
+    },
+    "boot_line2": {
+        "type": "text",
+        "value": ""
+    },
+    "screensaver_effect": {
+        "type": "string",
+        "value": "wave"
+    },
+    "screensaver_line1": {
+        "type": "text",
+        "value": ""
+    },
+    "screensaver_line2": {
+        "type": "text",
+        "value": ""
+    },
+    "screensaver_timeout": {
+        "type": "number",
+        "value": "120"
+    },
     "debug_mode": {
         "type": "boolean",
         "value": false

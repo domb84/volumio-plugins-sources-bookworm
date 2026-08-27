@@ -482,6 +482,169 @@
       ]
     },
     {
+      "id": "screen_effects",
+      "element": "section",
+      "label": "Screen Effects",
+      "icon": "fa-magic",
+      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Some effects draw a graphic and ignore the text entirely - the travelling wave and the big clock. Breathing needs a display that can dim, which this one may not: if it cannot, the effect declines to start and says so in the log.",
+      "onSave": {
+        "type": "controller",
+        "endpoint": "user_interface/retrotuner-ui",
+        "method": "saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "boot_effect",
+          "boot_line1",
+          "boot_line2",
+          "screensaver_effect",
+          "screensaver_line1",
+          "screensaver_line2",
+          "screensaver_timeout"
+        ]
+      },
+      "content": [
+        {
+          "id": "boot_effect",
+          "element": "select",
+          "label": "Boot graphic",
+          "value": {
+            "value": "splitflap",
+            "label": "Split-flap - characters roll and settle"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": "None - straight to the menu"
+            },
+            {
+              "value": "splitflap",
+              "label": "Split-flap - characters roll and settle"
+            },
+            {
+              "value": "post",
+              "label": "Power-on self test - all segments, then dissolve"
+            },
+            {
+              "value": "wipe",
+              "label": "Wipe - a curtain sweeps across and back"
+            },
+            {
+              "value": "typewriter",
+              "label": "Typewriter - characters land one at a time"
+            },
+            {
+              "value": "slide",
+              "label": "Slide-in - the rows arrive from opposite sides"
+            },
+            {
+              "value": "tease",
+              "label": "Meter tease - bars rise, collapse, reveal the text"
+            }
+          ]
+        },
+        {
+          "id": "boot_line1",
+          "type": "text",
+          "element": "input",
+          "label": "Boot text, line 1",
+          "value": ""
+        },
+        {
+          "id": "boot_line2",
+          "type": "text",
+          "element": "input",
+          "label": "Boot text, line 2",
+          "value": ""
+        },
+        {
+          "id": "screensaver_effect",
+          "element": "select",
+          "label": "Screensaver",
+          "value": {
+            "value": "wave",
+            "label": "Travelling wave - a sine scrolls across"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": "None - leave the menu on screen"
+            },
+            {
+              "value": "wave",
+              "label": "Travelling wave - a sine scrolls across"
+            },
+            {
+              "value": "bounce",
+              "label": "Bouncing text - drifts around the panel"
+            },
+            {
+              "value": "marquee",
+              "label": "Marquee - line 1 scrolls, line 2 stays put"
+            },
+            {
+              "value": "breathe",
+              "label": "Breathing - the panel fades up and down"
+            },
+            {
+              "value": "clock",
+              "label": "Big clock - two-row digits"
+            }
+          ]
+        },
+        {
+          "id": "screensaver_line1",
+          "type": "text",
+          "element": "input",
+          "label": "Screensaver text, line 1",
+          "value": ""
+        },
+        {
+          "id": "screensaver_line2",
+          "type": "text",
+          "element": "input",
+          "label": "Screensaver text, line 2",
+          "value": ""
+        },
+        {
+          "id": "screensaver_timeout",
+          "element": "select",
+          "label": "Start the screensaver after",
+          "value": {
+            "value": 120,
+            "label": "2 minutes"
+          },
+          "options": [
+            {
+              "value": 30,
+              "label": "30 seconds"
+            },
+            {
+              "value": 60,
+              "label": "1 minute"
+            },
+            {
+              "value": 120,
+              "label": "2 minutes"
+            },
+            {
+              "value": 300,
+              "label": "5 minutes"
+            },
+            {
+              "value": 600,
+              "label": "10 minutes"
+            },
+            {
+              "value": 1800,
+              "label": "30 minutes"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "diagnostics",
       "element": "section",
       "label": "Diagnostics",

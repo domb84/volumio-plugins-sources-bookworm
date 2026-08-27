@@ -208,6 +208,7 @@ def _display_manager():
     m._pending_render_timer = None
     m._schedule_deferred = Mock()
     m._level_meter = None      # hidden beta feature; off unless started
+    m._screensaver = None      # idle screen; off unless the timeout has fired
     return m
 
 

@@ -166,6 +166,69 @@ one alone just buys duplicate or dropped frames.
 decay gradually and that decay counts as sound, so what you see is several
 seconds longer than the constant.
 
+## Screen effects (`includes/effects.py`)
+
+A boot graphic, played once before the first menu render, and a screensaver for
+when nothing is playing. Same shape as the level meter: the effect owns the
+display, renders frames on a thread, and hands it back through an `on_stop`
+hook that redraws the menu.
+
+`frame(t, line1, line2)` is a pure function of time, so a resync can redraw the
+same frame and the tests can assert on what an effect draws at any moment.
+Boot effects declare a `duration` and finish; screensavers return `None` and
+loop. The two registries are separate on purpose -- a looping effect chosen as
+a boot graphic would hold the display before the menu had ever rendered.
+
+**The same 8 CGRAM slots, and they shape every effect.**
+
+| Effect | Glyphs | Why |
+|---|---|---|
+| Split-flap, slide-in | 0 | ROM characters only |
+| Self test, typewriter | 1 | a solid block |
+| Sub-character wipe | 5 | a cell filled 1–5 columns |
+| Meter tease, travelling wave | 8 | `bar_bitmaps()`, unchanged |
+| Big clock | 8 + ROM block | corner and bar pieces |
+
+Two of those are worth knowing about:
+
+* **The wipe covers left-to-right and uncovers right-to-left.** The obvious
+  version -- a bar sweeping right with text appearing behind it -- cannot work:
+  the cell at the boundary would need text pixels *and* block pixels in one
+  glyph, which is per-cell art. Reversing the second pass means the part still
+  covered is always the *left* of a cell, so one family of left-aligned fills
+  does both directions. Five glyphs buy an 80-step sweep across 16 cells, which
+  is why it moves smoothly rather than in character-sized jumps.
+* **The clock needs nine shapes and there are eight slots**, so the solid block
+  comes from ROM (`chr(0xFF)`) instead. Every big-digit library for the HD44780
+  does the same. It is the one effect that breaks on a module whose ROM lacks
+  that character -- `FULL_BLOCK` in `effects.py` is the single place to change.
+  Everything else that wants a block spends a CGRAM slot on it instead, so it
+  works either way.
+
+**Screensavers run at 4-15 fps deliberately.** Continuous 60fps rendering is the
+workload that desynced the bus in the first place (see "Display driver"), and
+nothing in the idle set needs more. They resync going in and out, as the meter
+does. VFDs also burn in, which is why the idle set moves and the clock wanders a
+column every minute rather than sitting still.
+
+**Breathing needs a brightness command the display may not have.** `DisplayController`
+currently offers only on/off, so the effect declares `requires = ('set_brightness',)`
+and refuses to start rather than blinking the panel. The code is there for the day
+that command lands; check the module datasheet, most VFD controllers of this type
+take one.
+
+Where it hooks in, both in `menu_manager.py`:
+
+* Boot runs inline on the menu thread in `run()`, replacing the
+  "Initialising..." message. Blocking on purpose -- nothing else can usefully
+  happen before the first menu render, and a thread would race it onto the
+  display.
+* The screensaver hangs off `_reset_screensaver_timer()`, armed by any control
+  input and by playback stopping. It only takes the display when nothing is
+  playing: the level meter is already the idle screen while something is.
+
+Empty text falls back to the hostname, which on Volumio is the device name.
+
 ## Display driver (`rpi-lcd-menu` fork)
 
 A frame is 34 controller instructions: cursor home, 16 characters, a set-address
@@ -361,6 +424,51 @@ for our own restarts.
 
 **SPI** needs `dtparam=spi=on` in `/boot/userconfig.txt` and a reboot — only a
 boot re-probes the pin mux. Until then every MCP3008 read returns 0.
+
+## Install
+
+**Nothing that needs compiling goes in the venv.** `RPi.GPIO` and `spidev` are
+the only requirements that would, so they come prebuilt from apt
+(`python3-rpi.gpio`, `python3-spidev`) and the venv is created with
+`--system-site-packages` so it can see them. That keeps `python3-dev` out
+entirely, which matters: `python3-dev` and `python3-venv` are pinned with `=` to
+the exact python3.11 build on this image, so asking for either drags apt into
+upgrading python3.11/libc6/locales to match — which previously triggered a mass
+service restart (needrestart, or the libc6 postinst prompt) that broke playback
+and crash-looped upmpdcli. The apt packages depend on python3 by an ordinary
+range instead, so they pull none of that in.
+
+For the same reason the venv is built by `virtualenv` fetched as a standalone
+zipapp, not by the stdlib `venv` module — that would need `python3-venv`, same
+pin. virtualenv bundles its own pip, so it does not need `ensurepip` either.
+
+**The venv lives outside the plugin directory** (`/data/retrotuner-ui/venv`). It
+is created as root, and a root-owned subfolder inside the plugin dir stops
+Volumio (running as `volumio`) removing the old folder on update, so the
+update's `mv` fails with "Directory not empty".
+
+**cava is an install dependency, not an optional extra** — it holds the tap fifo
+open permanently, and an unread fifo stops playback within a second. See the
+audio tap section above.
+
+**Updating the `rpi-lcd-menu` fork needs `--force-reinstall`.** pip sees an
+installed version and skips otherwise, and pushing to a branch does not move the
+version number, so it cannot tell a new commit from the installed one:
+
+```
+pip install --force-reinstall --no-deps git+https://github.com/domb84/rpi-lcd-menu.git
+```
+
+Three requirements the fork has to meet, none of which pip can check, and only
+the first of which fails loudly:
+
+* `create_char()` and `render_frame()`, or the level meter dies at runtime with
+  `AttributeError`.
+* The render-performance work (#6) — a frame takes ~2.7ms instead of ~14ms. The
+  meter defaults to 60fps and offers 120, which the older timing cannot serve:
+  it would sit at 84% of wall time mid-render and starve the SPI polling.
+* 2.4.0 or newer, for the enable-pulse hold and `resync_display()` — see the
+  display driver section. Both degrade quietly on an older copy.
 
 ## Testing
 

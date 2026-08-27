@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from includes import api, controls, level_meter, menu_manager, volumio
+from includes import api, controls, effects, level_meter, menu_manager, volumio
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json")
@@ -14,8 +14,7 @@ CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("RetroTuner UI")
 
-# Both log every packet at INFO, including whole browse payloads, which buries
-# our own lines.
+# Both log every packet at INFO, whole browse payloads included, burying our own lines.
 logging.getLogger("socketio").setLevel(logging.WARNING)
 logging.getLogger("engineio").setLevel(logging.WARNING)
 
@@ -95,6 +94,22 @@ def load_button_skip_config(config_data: Dict[str, Any]) -> Dict[str, Tuple[str,
     }
 
 
+def parse_optional_text_field(config_data: Dict[str, Any], key: str) -> str:
+    """Read a free-text setting, trimmed to what the display can show."""
+    value = config_data.get(key, {}).get("value", "")
+    return str(value or "")[:effects.LCD_COLUMNS]
+
+
+def parse_effect(config_data: Dict[str, Any], key: str, supported, default: str) -> str:
+    """Read an effect id, falling back rather than showing nothing on a typo."""
+    value = config_data.get(key, {}).get("value")
+    if value in supported:
+        return value
+    if value is not None:
+        logger.warning("Unknown %s %r; using %s", key, value, default)
+    return default
+
+
 def parse_meter_mode(config_data: Dict[str, Any]) -> str:
     """Read the level meter layout, falling back through the setting it replaced.
 
@@ -138,6 +153,14 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
     meter_frame_rate = parse_optional_int_field(
         config_data, "meter_framerate", level_meter.FRAMES_PER_SECOND)
     meter_mode = parse_meter_mode(config_data)
+    boot_effect = parse_effect(config_data, "boot_effect",
+                               effects.SUPPORTED_BOOT_EFFECTS,
+                               effects.DEFAULT_BOOT_EFFECT)
+    screensaver_effect = parse_effect(config_data, "screensaver_effect",
+                                      effects.SUPPORTED_SCREENSAVER_EFFECTS,
+                                      effects.DEFAULT_SCREENSAVER_EFFECT)
+    screensaver_timeout = parse_optional_int_field(
+        config_data, "screensaver_timeout", int(effects.DEFAULT_SCREENSAVER_TIMEOUT))
 
     lcd_rs = parse_int_field(config_data, "lcd_rs")
     lcd_e = parse_int_field(config_data, "lcd_e")
@@ -172,8 +195,7 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         button_hysteresis=button_hysteresis,
     )
 
-    # Constructed here (no I/O), run() is the thread entry point -- so hardware
-    # and sockets are claimed on the thread that owns them.
+    # Constructed here (no I/O); run() claims hardware and sockets on the thread that owns them.
     controls_worker = controls.Controls(control_queue, config, stop_event)
     menu_worker = menu_manager.MenuManager(
         control_queue, volumio_queue, menu_manager_queue,
@@ -181,6 +203,13 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         rotary_skip_track=rotary_skip_track,
         meter_frame_rate=meter_frame_rate,
         meter_mode=meter_mode,
+        boot_effect=boot_effect,
+        boot_line1=parse_optional_text_field(config_data, "boot_line1"),
+        boot_line2=parse_optional_text_field(config_data, "boot_line2"),
+        screensaver_effect=screensaver_effect,
+        screensaver_line1=parse_optional_text_field(config_data, "screensaver_line1"),
+        screensaver_line2=parse_optional_text_field(config_data, "screensaver_line2"),
+        screensaver_timeout=screensaver_timeout,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)
 
@@ -211,9 +240,7 @@ def main() -> None:
 
     threads = build_threads(config_data)
     for thread in threads:
-        # Daemonise so a stuck worker can never keep the process alive past
-        # shutdown — systemd's restart then completes quickly instead of
-        # waiting out the stop timeout (which blocks the Volumio plugin).
+        # Daemonised so a stuck worker can't hold the process past shutdown and stall the restart.
         thread.daemon = True
         thread.start()
 
