@@ -58,10 +58,8 @@ FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
 # Offered in the settings UI. 15 is the escape hatch if the meter competes with
 # button polling; 120 is near what the display can be driven at.
 SUPPORTED_FRAME_RATES = (15, 30, 60, 120)
-# Quiet time before the display says "NO AUDIO". Measured from the last frame
-# with any signal, and cava's decay counts as signal, so what you see is a few
-# seconds longer. Erring long: a false alarm between tracks is worse than an
-# empty meter.
+# Quiet before "NO AUDIO". cava's decay counts as signal, so what you see is a
+# few seconds longer. Long on purpose: a false alarm between tracks is worse.
 SILENCE_TIMEOUT = 10.0
 
 
@@ -293,10 +291,8 @@ class LevelMeter:
         showing_silence = False
         try:
             self._load_glyphs()
-            # Non-blocking, and a raw descriptor rather than a file object: a
-            # blocking open would hang the button press until cava opened its
-            # end, and readline() cannot express "nothing yet" distinctly from
-            # end of stream.
+            # Non-blocking so the button press cannot hang, and a raw fd
+            # because readline() cannot express "nothing yet" from end of file.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
 
             while not self._stop.is_set():
@@ -311,9 +307,8 @@ class LevelMeter:
                     if chunk:
                         pending += chunk
 
-                # cava writes faster than the display can be redrawn, so take
-                # the newest complete line and discard the backlog; showing a
-                # stale frame is worse than skipping to the current one.
+                # Newest complete line, backlog discarded: a stale frame is
+                # worse than a skipped one.
                 latest = None
                 if b'\n' in pending:
                     parts = pending.split(b'\n')
@@ -333,10 +328,8 @@ class LevelMeter:
                 if levels and any(levels):
                     last_sound = started
 
-                # Exactly one write per frame, and the silence notice is latched
-                # rather than resent. Previously both branches could fire in the
-                # same frame -- bars drawn directly, then "NO AUDIO" queued over
-                # the top 20 times a second, which reads as a violent flicker.
+                # One write per frame, and the notice is latched: drawing bars
+                # and queueing "NO AUDIO" over them flickers violently.
                 if started - last_sound > SILENCE_TIMEOUT:
                     if not showing_silence:
                         self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))

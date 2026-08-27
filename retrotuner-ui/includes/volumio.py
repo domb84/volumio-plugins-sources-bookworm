@@ -349,10 +349,8 @@ class Volumio:
             status = clean_state['status']
 
             # Drives the menu manager's idle screen. Decided here because a
-            # stop goes down the "no media" branch below and never reaches
-            # show_track_info, so it could not be inferred there. Pause counts
-            # as not playing; sent only on change, as radio re-pushes state
-            # every few seconds.
+            # stop never reaches show_track_info. Pause counts as not playing;
+            # sent on change only, as radio re-pushes state constantly.
             playing = status == 'play'
             if playing != self._last_playing:
                 self._last_playing = playing
@@ -402,17 +400,12 @@ class Volumio:
 
     def _schedule_info_update(self, result: str, immediate: bool = False,
                               only_if_pending: bool = False) -> None:
-        """Debounce rapid successive pushState calls for the same track.
+        """Debounce rapid pushState calls for the same track.
 
-        Volumio often sends an initial state without audio details, then the
-        same state again moments later with bitrate/samplerate filled in.
-        Holding the update briefly and replacing it if a richer one arrives
-        means only the final message reaches the display.
-
-        ``immediate`` sends straight away with a ``force`` flag, skipping the
-        scroll-idle deferral (an explicit info-button request). ``only_if_pending``
-        applies only if an earlier update is still waiting to be shown, so late
-        audio details fold into it without restarting an already-visible scroll.
+        Volumio sends state without audio details, then again with them; holding
+        the update briefly means only the final one reaches the display.
+        ``immediate`` skips the wait (info button); ``only_if_pending`` folds
+        late details into an update not yet shown, without restarting a scroll.
         """
         with self._pending_info_lock:
             if only_if_pending and self._pending_info_timer is None:
@@ -492,10 +485,8 @@ class Volumio:
         self._remember_browse_kinds(sources_list)
         result = json.dumps(sources_list)
         logger.debug("%s", result)
-        # Volumio emits a spurious empty pushBrowseLibrary right after
-        # removeFromFavourites. If the refresh timer is still pending, this
-        # isn't the real re-browse yet -- ignore it and let the timer fetch the
-        # actual list. Real content means the timer is now redundant, so cancel it.
+        # Volumio emits a spurious empty push after removeFromFavourites; while
+        # the refresh timer is pending that is not the real re-browse.
         if not sources_list and self._refresh_timer is not None:
             logger.debug("Ignoring spurious empty pushBrowseLibrary while refresh timer is pending")
             return
@@ -518,11 +509,8 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
-        # menu_manager only sorts by position when the *first* item has one (see
-        # build_menu); otherwise it falls back to an alphabetical sort, where
-        # "Configuration" lands early regardless of its own position. Volumio's
-        # source list carries no positions of its own, so backfill one for every
-        # item (preserving arrival order) purely to force the position-sort path.
+        # Backfilled in arrival order purely to force build_menu's position-sort
+        # path; without it the list sorts alphabetically. See NOTES.md.
         if not any(item.get('position') is not None for item in sources_list):
             for index, item in enumerate(sources_list):
                 item['position'] = index
@@ -537,15 +525,8 @@ class Volumio:
     def _remember_browse_kinds(self, sources_list) -> None:
         """Record what each listed item is, so entering one tells us its type.
 
-        Volumio reports an item's type only in the listing that contains it; by
-        the time we are inside it that listing is gone, so it has to be captured
-        on the way past.
-
-        Accumulated, never replaced. The back button restores menus from
-        menu_manager's history without re-browsing, so the listing that told us
-        about an item may never arrive again -- replacing the map meant that
-        leaving a playlist and re-entering it lost the fact that it was a
-        playlist, and Play All vanished until the user returned to the main menu.
+        Accumulated, never replaced -- the back button restores menus without
+        re-browsing, so a listing may never arrive again. See NOTES.md.
         """
         for item in sources_list:
             uri = item.get('uri')
@@ -625,10 +606,7 @@ class Volumio:
         self._send('removeFromFavourites', {'uri': link, 'title': title, 'service': service})
 
     def search(self, title: str, link: str, service: str, playlist: Optional[str] = None) -> None:
-        # TODO:
-        # this feature does not work as search query is not documented
-        # https://volumio.github.io/docs/API/WebSocket_APIs.html
-        # https://community.volumio.org/t/rest-api-uri-for-browsing/10671
+        # TODO: does not work -- the query format is undocumented. See NOTES.md.
         logger.debug(f"Search for {title} from {link} in {service}")
         if playlist:
             self._send('search', {'uri':link, 'title':title, 'service':service, 'playlist':playlist})
@@ -667,14 +645,11 @@ class Volumio:
 
 
     def play_all(self, container_uri: str, service: Optional[str] = None) -> None:
-        """Replace the queue with everything in `container_uri` and start playing.
+        """Replace the queue with everything in `container_uri` and play.
 
-        Volumio expands the container server-side through the owning service's
-        explodeUri, so this one message enqueues the whole playlist/album/folder
-        instead of the single track the user happened to be sitting on. Whether
-        a URI is explodable was decided from its type when the entry was
-        offered; nothing generic can re-check it here, since every service uses
-        its own URI scheme.
+        Volumio expands it server-side via the owning service's explodeUri.
+        Whether a URI is explodable was decided from its type when the entry was
+        offered -- no URI pattern generalises, so it cannot be re-checked here.
         """
         if not container_uri:
             logger.warning("Play all called with no container uri")

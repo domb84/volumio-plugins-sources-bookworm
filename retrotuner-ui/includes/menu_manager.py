@@ -164,9 +164,8 @@ class MenuManager:
                         self.build_menu(queueItem['menu'], queueItem.get('remember', True),
                                         queueItem.get('play_all'))
                 elif 'info' in queueItem:
-                    # An explicitly requested info update (info button) must show
-                    # immediately; only automatic pushState updates are deferred
-                    # while the user is scrolling the menu.
+                    # Info button shows now; automatic updates defer while
+                    # the user is scrolling.
                     if queueItem.get('force'):
                         if self._info_release_timer is not None:
                             self._info_release_timer.cancel()
@@ -193,10 +192,7 @@ class MenuManager:
                 elif 'playing' in queueItem:
                     self._playing = queueItem['playing']
                     if not self._playing and self._meter_auto:
-                        # Paused or stopped. An idle meter has nothing left to
-                        # draw, so get it off the screen and ask what state we
-                        # are in: paused shows the track, stopped falls back to
-                        # the menu via the "no media" toast.
+                        # An idle meter has nothing left to draw once paused.
                         self._stop_auto_meter()
                 elif 'clear' in queueItem:
                     self.display_message("", clear=True)
@@ -412,14 +408,8 @@ class MenuManager:
     def _on_menu_idle(self) -> None:
         """Fall back to a resting display 30s after the last control input.
 
-        While something is playing that is the level meter -- on a tuner front
-        panel the spectrum is what should be sitting there when nobody is
-        looking, and the track is still one press of INFO away. Paused or
-        stopped there is nothing to draw, so we ask for the state instead and
-        get the track or the menu.
-
-        Nothing is re-armed here: the meter is the resting state, and the next
-        control press both dismisses it and starts the timer again.
+        The meter while something plays, the track or menu otherwise. Nothing is
+        re-armed: the next control press dismisses it and restarts the timer.
         """
         self._idle_timer = None
 
@@ -559,9 +549,8 @@ class MenuManager:
         index = input_data.get('index', 0)
         menu = input_data.get('menu', None)
 
-        # An empty menu after a background refresh (deleting the last
-        # favourite) goes up to the parent rather than showing a stale list.
-        # Before remember(), so the back history is not polluted.
+        # An empty menu after a background refresh goes up to the parent rather
+        # than showing a stale list. Before remember(), to keep history clean.
         if not menu:
             if not remember:
                 previous = self.go_back()
@@ -579,9 +568,8 @@ class MenuManager:
         if self.menu is not None:
             self.menu.items = []
 
-        # Items arrive with every key present but possibly None, so `or ''`/`or 0`
-        # is needed rather than .get() defaults -- an unnamed Spotify playlist
-        # would otherwise crash the sort and abort the whole menu build.
+        # Keys are present but may be None, so `or 0` is needed rather than a
+        # .get() default -- an unnamed item would otherwise crash the sort.
         if menu and menu[0].get('position') is not None:
             menu = sorted(menu, key=lambda x: (x.get('position') or 0))
         else:
@@ -593,11 +581,8 @@ class MenuManager:
         # parse menu
         counter = 0
 
-        # Offer to play the whole container, but only when the list actually
-        # holds playable items -- a list of sub-folders has nothing to play.
-        # Added before the loop so it takes position 0, which also keeps it
-        # first when this menu is restored from back-history (remember() saves
-        # each item's position and build_menu sorts by it).
+        # Only when the list holds something playable. Added before the loop so
+        # it takes position 0 and stays first when restored from history.
         if play_all_uri and any(not is_folder(i) for i in menu):
             logger.debug("Adding %s -> %s", PLAY_ALL_LABEL, play_all_uri)
             self.menu.append_item(

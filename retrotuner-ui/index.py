@@ -14,9 +14,8 @@ CONFIG_PATH = Path("/data/configuration/user_interface/retrotuner-ui/config.json
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("RetroTuner UI")
 
-# socket.io is chatty at INFO and engineio worse: it logs every packet, including
-# whole browse payloads, which buries our own lines. Neither is useful unless you
-# are debugging the Volumio connection itself.
+# Both log every packet at INFO, including whole browse payloads, which buries
+# our own lines.
 logging.getLogger("socketio").setLevel(logging.WARNING)
 logging.getLogger("engineio").setLevel(logging.WARNING)
 
@@ -173,9 +172,8 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         button_hysteresis=button_hysteresis,
     )
 
-    # Each worker is constructed here (cheap, no I/O) and its run() is the
-    # thread entry point, so hardware and network are claimed on the thread that
-    # owns them.
+    # Constructed here (no I/O), run() is the thread entry point -- so hardware
+    # and sockets are claimed on the thread that owns them.
     controls_worker = controls.Controls(control_queue, config, stop_event)
     menu_worker = menu_manager.MenuManager(
         control_queue, volumio_queue, menu_manager_queue,

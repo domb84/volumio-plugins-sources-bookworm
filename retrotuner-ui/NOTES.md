@@ -20,15 +20,69 @@ softvolume it works, and the meter follows the volume control, which is what you
 want. `mpd_oled` (postalsa) and fusion (postDsp) tap in the same place.
 
 (The original diagnosis blamed a missing `format_N` key. That was wrong — see
-below — so the real cause of the priority 8 failure is not established.)
+below — so the real cause of the priority-8 failure is not established. Since
+`format_N` only constrains negotiation, the likely cause is that the format
+available at priority 8 was not in the declared list, so the branch never
+opened. Unverified.)
 
-**Do not wrap `rt_fifo` in a `type plug`.** An earlier revision did, forcing
-44100/S16_LE, which made the two `multi` branches impose contradictory
-constraints. alsa-lib then asserts:
+**Do not wrap `rt_fifo` in a `type plug`.** Tried twice. The first attempt
+forced 44100/S16_LE and alsa-lib asserted:
 
     snd1_pcm_hw_param_get_min: Assertion `!snd_interval_empty(i)' failed
 
-and MPD dies with SIGABRT.
+killing MPD with SIGABRT. The second put a converting plug on the fifo branch
+only, with `format`/`rate` under `slave` rather than at the top level, on the
+theory that the first attempt had merely constrained the wrong side. The device
+then failed to open. Do not try a third time — and note the second attempt was
+solving a problem that does not exist, see below.
+
+**Measured behaviour (verified on hardware, 192k/24-bit source):**
+
+| | Format | Rate |
+|---|---|---|
+| DAC, branch a | `S24_LE` — native | 192000 — native |
+| cava, branch b | `S16_LE` — converted | 192000 — native |
+
+So the two branches carry **different formats at the same time**: a `multi` does
+not force a uniform format across its slaves, and the tap costs the output path
+nothing. There is no bit-depth clamp.
+
+That needed proving rather than assuming, because `hw_params` reports the
+*container*, not the content — `S24_LE` shows the DAC is fed 24-bit words, not
+that those words carry 24 bits. The check that settles it is a tone below the
+16-bit floor, which an undithered S24→S16 truncation destroys outright:
+
+    sox -n -b 24 -r 48000 -c 2 /tmp/quiet24.wav synth 30 sine 1000 vol -100dB
+
+Played with the amp well up it is faintly but clearly audible, so the low bits
+survive the tap. (16-bit carries ~96 dB of range, so −100 dBFS quantises to
+nothing.)
+
+What converts for branch b alone is still unidentified — `volumiofifo` does not,
+and neither does `multi`. Only the outer `type plug` on `rt_in` can, so it
+appears to convert per-slave. Behaviour established, mechanism not.
+
+Method, since none of this is visible from the config: `cat
+/proc/asound/card*/pcm*p/sub*/hw_params` while playing gives the DAC side.
+For the fifo, read cava's own consumption rather than the fifo itself — a pipe
+delivers each byte to one reader, so `cat`-ing it steals data from cava:
+
+    pid=$(pgrep -f retrotuner-cava)
+    a=$(awk '/^rchar/{print $2}' /proc/$pid/io); sleep 5
+    b=$(awk '/^rchar/{print $2}' /proc/$pid/io)
+    echo $(( (b - a) / 5 ))          # bytes/sec = rate x channels x bytes/sample
+
+Cross-check the rate against `hw_params` at the same moment: 16-bit at 192k and
+24-in-32-bit at 96k are both 768,000 B/s and otherwise indistinguishable.
+
+**cava's `sample_rate` is wrong except on 44.1k material.** `volumiofifo` calls
+`snd_pcm_ioplug_set_param_list` for `SND_PCM_IOPLUG_HW_FORMAT` only, so the
+format is pinned to what we declare but the rate passes straight through. cava's
+config hardcodes 44100, so its frequency mapping is off by the ratio: 1.09x at
+48k, 2.2x at 96k, 4.35x at 192k. The bars still move, which is why it looks
+fine. Fixing it needs `volumiohook` + `hw_params_command` (as fusion does)
+rewriting `sample_rate` and restarting cava -- outside the multi, where it
+cannot cause either failure above.
 
 **`format_N` is a list, not a mapping.** volumiofifo matches on the `"format_"`
 prefix with `strncmp` and never parses the suffix — it exists only because ALSA
@@ -171,8 +225,62 @@ the current station reuses its index. Otherwise `addPlay` appends forever;
 `pushState` fires every few seconds for radio, so state is deduplicated on track
 text only — a jittering bitrate must not restart the LCD scroll.
 
+**An item's type is only in the listing that contains it.** By the time you are
+inside it that listing is gone, so `_remember_browse_kinds` captures it on the
+way past. The map is **accumulated, never replaced**: the back button restores
+menus from history without re-browsing, so the listing that told us about an
+item may never arrive again. Replacing the map meant leaving a playlist and
+re-entering it lost the fact that it was a playlist, and Play All vanished until
+you went back to the main menu.
+
+**Volumio emits a spurious empty `pushBrowseLibrary`** right after
+`removeFromFavourites`. If the post-removal refresh timer is still pending, that
+empty push is not the real re-browse — ignore it and let the timer fetch the
+real list. Real content means the timer is redundant and gets cancelled.
+
+**Browse sources carry no `position`.** `menu_manager.build_menu` only sorts by
+position when the *first* item has one, otherwise it sorts alphabetically, where
+"Configuration" lands early regardless. So positions are backfilled in arrival
+order purely to force the position-sort path.
+
+**`search()` does not work.** The query format is undocumented; neither
+[the WebSocket API docs](https://volumio.github.io/docs/API/WebSocket_APIs.html)
+nor [this thread](https://community.volumio.org/t/rest-api-uri-for-browsing/10671)
+give the shape it expects.
+
 **Log noise:** `ControllerMpd::pushError ... reading 'split'` and `updateQueue
 error: null` appear even when everything is working. Not a signal.
+
+## Button reading
+
+Resistor ladder into an MCP3008, matched against **raw ADC counts**, not
+voltages. On a measured Teac ladder adjacent buttons sit **69–141 counts
+apart**, and every tolerance is sized against that gap.
+
+The dominant error is contact resistance, not electrical noise: an aged switch
+read **21 counts higher on a light press than a firm one**. So the bands and the
+capture confirm tolerance both have to absorb more press-to-press variation than
+noise alone would suggest.
+
+Four values must stay in step across the two languages, because `index.js` hard
+codes fallbacks for configs written before these settings existed:
+
+| `controls.py` | `index.js` |
+|---|---|
+| `ADC_SAMPLES` (5) | `setValue(..., 'button_samples', 5)` |
+| `BUTTON_HYSTERESIS` (6) | `setValue(..., 'button_hysteresis', 6)` |
+| tolerances sized to the 69–141 gap | `CAPTURE_CONFIRM_TOLERANCE`, `CAPTURE_BAND_HALF_WIDTH` |
+
+Samples are reduced with a **median, not a mean** — that discards a read
+corrupted by an LCD strobe instead of averaging its error in. Each raw read
+costs ~480µs at `SPI_CLOCK_HZ`, so raising the count eats into the poll
+interval.
+
+**Every channel reading 0 usually means the pin mux never took.** That is a
+legitimate-looking value rather than an obviously broken read, so it is warned
+about explicitly. Bitbang mode claims the SPI pins as plain GPIO and nothing
+restores their ALT0 function afterwards — only a reboot, when the SPI driver
+probes, does that.
 
 ## Config plumbing
 

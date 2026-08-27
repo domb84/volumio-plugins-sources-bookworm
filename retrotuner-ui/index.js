@@ -282,10 +282,8 @@ retrotunerui.prototype.onRestart = function() {
     try { fs.writeFileSync(RESTART_MARKER_PATH, String(Date.now())); }
     catch (e) { self.logger.error('RetroTuner UI - could not write restart marker: ' + e); }
 
-    // 'start' not 'restart' for pigpiod: restarting races the controls' pigpio
-    // reconnect and leaves the rotary encoder dead. cava is left alone too --
-    // bouncing it stalls playback (NOTES.md, "Audio tap"), and settings saves
-    // come through here routinely.
+    // 'start' not 'restart' for pigpiod: a restart races the controls' pigpio
+    // reconnect and kills the encoder. cava is left alone -- see NOTES.md.
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
@@ -382,10 +380,8 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
             setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
             setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            // Added after these shipped, so an old config may not have them -- v-conf's
-            // get() then returns undefined, leaving the field blank, and an unedited
-            // Save submits an empty string that isValid() silently rejects. Must match
-            // controls.py's ADC_SAMPLES/BUTTON_HYSTERESIS -- keep the two in sync.
+            // Defaults matter: without them an old config leaves the field
+            // blank and Save submits "". Must match controls.py.
             setValue(advanced, 'button_samples', self.config.get('button_samples', 5));
             setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis', 6));
             defer.resolve(uiconf);
@@ -522,11 +518,8 @@ retrotunerui.prototype.saveOptions = function (data) {
     const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
 
     if (rebootPending) {
-        // A plugin restart can't apply an SPI/bitbang switch or a new boot
-        // parameter -- only a reboot re-probes the pin mux -- and restarting
-        // right now would try to open a kernel SPI device that doesn't exist
-        // yet, crashing the controls thread. The modal above is the only path
-        // forward here; this restart happens implicitly once they reboot.
+        // Only a reboot re-probes the pin mux, and restarting now would open
+        // an SPI device that does not exist yet and crash the controls thread.
         self.logger.info('RetroTuner UI - reboot pending; not restarting the plugin');
     } else if (noConflicts) {
         self.logger.info('RetroTuner UI - restarting services');
@@ -554,11 +547,8 @@ var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alon
 // count twice, so confirming a capture is a tolerance test and what gets
 // stored is a band around the midpoint of the two readings.
 var ADC_MAX = 1023;
-// Sized against a measured Teac ladder (adjacent buttons 69-141 counts apart --
-// keep in sync with controls.py's BUTTON_HYSTERESIS). The dominant error is
-// contact resistance, not noise -- an aged switch read 21 counts higher on a
-// light press than a firm one, so both the band and the confirm tolerance
-// have to cover that much press-to-press variation.
+// Sized against a measured 69-141 count gap between adjacent buttons, and wide
+// enough for contact resistance. See NOTES.md ("Button reading").
 var CAPTURE_CONFIRM_TOLERANCE = 15;  // counts two presses may differ by and still confirm
 var CAPTURE_BAND_HALF_WIDTH = 25;    // half-width of the band written to the config
 
@@ -671,9 +661,8 @@ retrotunerui.prototype.clearSelectedButton = function () {
     return libQ.resolve();
 };
 
-// Begin a capture session if one isn't already running. Keeps the controls
-// paused (via the flag file) until the user saves or goes idle. Returns
-// false if the session could not be started.
+// Begin a capture session, pausing the controls until save or idle. False if
+// it could not start.
 retrotunerui.prototype.ensureCaptureSession = function () {
     const self = this;
     if (self._captureSession) { return true; }
@@ -784,9 +773,8 @@ retrotunerui.prototype.pollCapture = function () {
     }
 };
 
-// Capture the resting (no-press) value of both ADC channels. The python side
-// measures each channel's baseline as soon as capture mode starts; we just
-// need the user to leave the buttons alone for a moment, then read it back.
+// Read back the resting value of both ADC channels; python measures it when
+// capture starts, so this just needs the buttons left alone for a moment.
 retrotunerui.prototype.captureBaseResistance = function () {
     const self = this;
 
@@ -939,9 +927,8 @@ retrotunerui.prototype._checkButtonConflicts = function () {
 retrotunerui.prototype.systemctl = function (cmd, unit) {
     var self = this;
 
-    // try-restart bounces a unit only if it is already running. That is what a
-    // cava framerate change wants: never start the analyser on a box where the
-    // audio tap was never installed and it has nothing to read.
+    // try-restart bounces a unit only if already running, so a meter settings
+    // change never starts cava on a box with no audio tap.
     if (!['start', 'stop', 'restart', 'try-restart'].includes(cmd)) {
         return libQ.reject(new TypeError('Unknown systemd command: ' + cmd));
     }
@@ -971,9 +958,8 @@ retrotunerui.prototype.pigpiodServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'pigpiod.service');
 };
 
-// cava reads the audio tap and publishes the analysed bars. It must run for as
-// long as the tap is in the ALSA chain -- not just while the meter is on screen
-// -- because an unread fifo blocks ALSA and stops playback.
+// Must run for as long as the tap is in the ALSA chain, not just while the
+// meter is on screen: an unread fifo stalls playback.
 retrotunerui.prototype.cavaServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'retrotuner-cava.service');
 };
