@@ -84,6 +84,9 @@ class TestGlyphBudget:
         # the free ROM one, or the digits do not fit in CGRAM at all.
         clock = effects.BigClock()
         assert len(clock.glyphs()) == 8
+        # Fixed at 14:15: the block appears only in 1, 4 and 5, so against the
+        # wall clock this would pass or fail depending on the time of day.
+        clock._now = lambda: time.struct_time((2026, 8, 28, 14, 15, 0, 4, 240, 0))
         assert effects.FULL_BLOCK in clock.frame(0, '', '')
 
     def test_the_wipe_reuses_one_glyph_family_for_both_passes(self):

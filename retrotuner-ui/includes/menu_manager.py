@@ -111,9 +111,7 @@ class MenuManager:
         # render main menu
         self.volumioQ.put({'button': 'menu'})
 
-        # Both countdowns start here, not on the first button press: a plugin
-        # restart nobody touches would otherwise never reach the meter or the
-        # screensaver at all.
+        # Not on the first button press: a restart nobody touches would never reach either.
         self._reset_idle_timer()
 
         # define control actions
@@ -204,8 +202,7 @@ class MenuManager:
                         # Music started: the meter or the track is the better idle screen.
                         self._stop_screensaver()
                     else:
-                        # Playback stopping is itself the trigger, so the screensaver
-                        # still arrives if nobody touches a button again.
+                        # A stop is itself a trigger, so it arrives without a button press.
                         self._reset_screensaver_timer()
                     if not self._playing and self._meter_auto:
                         # An idle meter has nothing left to draw once paused.
@@ -303,8 +300,7 @@ class MenuManager:
     def _play_boot_effect(self) -> bool:
         """Draw the boot graphic, blocking until it finishes.
 
-        On the menu thread on purpose: nothing else can usefully happen before
-        the first menu render, and a thread would race it onto the display.
+        On the menu thread on purpose: a thread would race the first menu render.
         """
         effect = effects.boot_effect(self._boot_effect)
         if effect is None:

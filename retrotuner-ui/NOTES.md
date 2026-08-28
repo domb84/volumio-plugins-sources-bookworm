@@ -99,12 +99,6 @@ formats because CamillaDSP preserves bit depth.
 `mpd_oled` targets `postalsa` and peppy `peppy_out`; neither exists in this
 Volumio version. Check names in `/etc/asound.conf` before changing the target.
 
-Note the tap converts **format but not rate**, so cava sees whatever the source
-plays at. Its config assumes 44100; a 48kHz stream still analyses, with the
-bands shifted slightly. Fixing it properly would need `type volumiohook` with
-`hw_params_command` (fusion does this for CamillaDSP) plus a cava restart per
-rate change — judged not worth it.
-
 ## cava (`cava/retrotuner-cava.conf`)
 
 Runs as `retrotuner-cava.service` so a plugin restart — which happens on every
@@ -189,45 +183,33 @@ a boot graphic would hold the display before the menu had ever rendered.
 | Meter tease, travelling wave | 8 | `bar_bitmaps()`, unchanged |
 | Big clock | 8 + ROM block | corner and bar pieces |
 
-Two of those are worth knowing about:
-
 * **The wipe covers left-to-right and uncovers right-to-left.** The obvious
-  version -- a bar sweeping right with text appearing behind it -- cannot work:
-  the cell at the boundary would need text pixels *and* block pixels in one
-  glyph, which is per-cell art. Reversing the second pass means the part still
-  covered is always the *left* of a cell, so one family of left-aligned fills
-  does both directions. Five glyphs buy an 80-step sweep across 16 cells, which
-  is why it moves smoothly rather than in character-sized jumps.
-* **The clock needs nine shapes and there are eight slots**, so the solid block
-  comes from ROM (`chr(0xFF)`) instead. Every big-digit library for the HD44780
-  does the same. It is the one effect that breaks on a module whose ROM lacks
-  that character -- `FULL_BLOCK` in `effects.py` is the single place to change.
-  Everything else that wants a block spends a CGRAM slot on it instead, so it
-  works either way.
+  version — a bar sweeping right with text appearing behind it — cannot work:
+  the boundary cell would need text pixels *and* block pixels in one glyph,
+  which is per-cell art. Reversing the second pass keeps the covered part always
+  on the *left* of a cell, so one family of left-aligned fills does both
+  directions, and 5 glyphs buy an 80-step sweep across 16 cells.
+* **The clock needs nine shapes for eight slots**, so its solid block comes from
+  ROM (`chr(0xFF)`), as every HD44780 big-digit library does. It is the only
+  effect that breaks on a module whose ROM lacks it; `FULL_BLOCK` is the one
+  place to change. Everything else spends a CGRAM slot on its block instead.
 
-**Screensavers run at 4-15 fps deliberately.** Continuous 60fps rendering is the
-workload that desynced the bus in the first place (see "Display driver"), and
-nothing in the idle set needs more. They resync going in and out, as the meter
-does. VFDs also burn in, which is why the idle set moves and the clock wanders a
-column every minute rather than sitting still.
+**Screensavers run at 4-15 fps deliberately.** Sustained 60fps is the workload
+that desynced the bus (see "Display driver") and nothing idle needs more. VFDs
+also burn in, so the idle set moves and the clock wanders a column each minute.
 
-**Breathing needs a brightness command the display may not have.** `DisplayController`
-currently offers only on/off, so the effect declares `requires = ('set_brightness',)`
-and refuses to start rather than blinking the panel. The code is there for the day
-that command lands; check the module datasheet, most VFD controllers of this type
-take one.
+**Breathing needs a brightness command the display may not have.**
+`DisplayController` offers only on/off, so the effect declares
+`requires = ('set_brightness',)` and refuses to start rather than blinking the
+panel. Most VFD controllers of this type take one — check the datasheet.
 
-Where it hooks in, both in `menu_manager.py`:
-
-* Boot runs inline on the menu thread in `run()`, replacing the
-  "Initialising..." message. Blocking on purpose -- nothing else can usefully
-  happen before the first menu render, and a thread would race it onto the
-  display.
-* The screensaver hangs off `_reset_screensaver_timer()`, armed by any control
-  input and by playback stopping. It only takes the display when nothing is
-  playing: the level meter is already the idle screen while something is.
-
-Empty text falls back to the hostname, which on Volumio is the device name.
+Both hooks are in `menu_manager.py`: boot runs inline in `run()` in place of the
+"Initialising..." message, and the screensaver hangs off
+`_reset_screensaver_timer()`, armed at startup, by any control input, and by
+playback stopping. It only takes the display when nothing is playing — the meter
+is already the idle screen while something is. Both countdowns are armed in
+`run()` rather than only on a button press, or a restart nobody touches never
+reaches either. Empty text falls back to the hostname, i.e. the device name.
 
 ## Display driver (`rpi-lcd-menu` fork)
 
@@ -249,49 +231,42 @@ Two changes took a frame from ~14ms to ~2.7ms (ceiling roughly 370fps):
 
 ### The bus desync (fixed in 2.4.0)
 
-The first cut of (2) took the delays out and put nothing back, reasoning that a
-single `RPi.GPIO` output call takes 1–2µs and so clears the 450ns the enable
-pulse needs on its own. It does not. That is Python overhead, not a guarantee:
-0.4–2µs depending on CPU clock, cache and contention, and *shortest* under
-sustained rendering, when the governor is pinned at 1.4GHz. So the pulse is at
-its narrowest exactly when the display is busiest.
-
 There is no RW pin on this wiring, so the busy flag can never be read and every
 delay in the driver is a fixed guess. Undershoot one and the controller misses a
-nibble; from then on every byte is assembled from the low nibble of one write
-and the high nibble of the next. `0xC0` — "move to line 2" — is never seen
-intact, so all 32 characters of every frame land on line 1.
+nibble; from then on every byte is assembled from the low nibble of one write and
+the high nibble of the next. `0xC0` — "move to line 2" — is never seen intact, so
+all 32 characters land on line 1: **line 2 dead and frozen, line 1 flickering**
+because it is written twice a frame. Not gradual — clean until the first bad
+nibble, broken from then on, and only a plugin restart cleared it, because
+`initDisplay()` ran once in `__init__` and never again.
 
-That is the failure exactly as it presented: **line 2 dead and frozen on
-whatever it last held, line 1 flickering** because it is written twice a frame,
-sometimes full-screen garbage. It is not a gradual degradation. It runs clean
-until the first bad nibble and is broken from then on — which is why switching
-back to the menu did not help and only restarting the plugin did (that re-ran
-the `0x33`/`0x32` handshake). `initDisplay()` used to run once, in `__init__`,
-and never again.
-
-Removing `LCD_RETURNHOME` in (1) is what made it permanent rather than
-self-correcting: home also resets the display shift register, every frame, and
-that was the driver's only recovery behaviour.
+What undershot was (2). Its first cut removed the delays and put nothing back, on
+the reasoning that a single `RPi.GPIO` call takes 1–2µs anyway and so covers the
+450ns the enable pulse needs. That is Python overhead, not a guarantee: 0.4–2µs
+depending on clock, cache and contention, and *shortest* under sustained
+rendering, when the governor is pinned at 1.4GHz — narrowest exactly when the
+display is busiest. Removing `LCD_RETURNHOME` in (1) is what made it permanent
+rather than self-correcting: home also resets the display shift register every
+frame, and that was the only recovery behaviour there was.
 
 Two changes in 2.4.0:
 
 * **`pulseEnable` holds E for a real 1µs**, busy-waiting on `perf_counter()`
-  rather than sleeping. ~1.1µs actual against a 15ms floor for `sleep(50µs)` on
-  a dev box — an actual guarantee for roughly 150µs a frame, against the ~2ms a
-  frame the `command_delay_us` sleeps already cost.
-* **`resync_display()`**, which re-runs the handshake, reloads CGRAM and
-  redraws. `lcd_render` calls it every `RESYNC_FRAME_INTERVAL` frames (600, so
-  ~10s at 60fps), which turns "broken until restart" into "one bad frame". The
-  level meter also calls it when it starts and, more usefully, in its `finally`
-  before the menu is redrawn.
+  rather than sleeping — ~150µs a frame, against the ~2ms the `command_delay_us`
+  sleeps already cost.
+* **`resync_display()`** re-runs the handshake, reloads CGRAM and redraws.
+  `lcd_render` calls it every `RESYNC_FRAME_INTERVAL` frames (600, ~10s at
+  60fps), turning "broken until restart" into "one bad frame". The meter and the
+  screen effects also call it on the way in and out.
 
-Neither is the correct fix. The correct fix is to wire RW and poll the busy
-flag, which removes every fixed delay in the driver; that is a hardware change.
-Worth checking first, and not determinable from the code: whether the module is
-a 5V part being fed 3.3V logic, in which case V_IH is ~3.5V and every edge is
-marginal — that would explain the thermal sensitivity better than clock scaling
-alone.
+**Confirmed fixed by an overnight run at 60fps with no corruption** (28 Aug 2026)
+— hours of sustained rendering is the only thing that ever reproduced it.
+
+Neither is the *correct* fix, which is to wire RW and poll the busy flag,
+removing every fixed delay; that is a hardware change. Worth checking first, and
+not determinable from the code: whether the module is a 5V part fed 3.3V logic,
+where V_IH is ~3.5V and every edge is marginal — that would explain the thermal
+sensitivity better than clock scaling alone.
 
 ### One writer at a time
 
@@ -477,5 +452,7 @@ display, a fifo or a socket.
 
 Several tests exist to pin things that cannot import each other and would
 otherwise drift silently: the cava config against `level_meter.py`'s constants,
-`UIConfig.json`'s options against `SUPPORTED_MODES` and `SUPPORTED_FRAME_RATES`,
-and the cava config's section layout against what `index.js` rewrites.
+`UIConfig.json`'s options against `SUPPORTED_MODES`, `SUPPORTED_FRAME_RATES` and
+the effect registries, the effect ids across `effects.py` / `config.json` /
+`UIConfig.json` / `index.js`, and the cava config's section layout against what
+`index.js` rewrites.

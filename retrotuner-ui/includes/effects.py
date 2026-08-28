@@ -1,10 +1,8 @@
 """Boot graphics and idle screens for the 16x2 VFD.
 
-Same shape as the level meter: an effect owns the display, renders frames on a
-thread, and hands it back. The 8 CGRAM slots are the binding constraint on all
-of them -- see NOTES.md ("Screen effects") for what that rules out.
-
-Boot effects run once and finish. Screensavers loop until something stops them.
+Same shape as the level meter: the effect owns the display, renders on a thread,
+hands it back. Boot effects finish, screensavers loop. The 8 CGRAM slots shape
+every one of them -- see NOTES.md ("Screen effects").
 """
 import logging
 import math
@@ -20,9 +18,7 @@ LCD_COLUMNS = 16
 LCD_ROWS = 2
 CELL_ROWS = 8
 
-# ROM solid block. Free, unlike a CGRAM glyph, which is why the clock can afford
-# 8 custom glyphs and still have a block. Effects that need only a block use a
-# CGRAM slot instead, so they work on a module whose ROM lacks 0xFF.
+# Free, unlike a CGRAM glyph, and only the clock is short enough to need it.
 FULL_BLOCK = chr(0xFF)
 
 NONE = 'none'
@@ -93,9 +89,7 @@ class Effect:
         return None
 
 
-# --------------------------------------------------------------------------
-# Boot
-# --------------------------------------------------------------------------
+# ---- Boot ----------------------------------------------------------------
 
 _ROLL = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -177,8 +171,7 @@ class Wipe(Effect):
         lines = (_pad(line1), _pad(line2))
         rows = []
         if t < self._COVER:
-            # Cover, left to right. Nothing is revealed yet, so ahead of the
-            # curtain the cell is blank rather than text.
+            # Cover, left to right. Ahead of the curtain the cell is blank, not text.
             edge = _ease_out(t / self._COVER) * span
             for text in lines:
                 out = []
@@ -187,8 +180,7 @@ class Wipe(Effect):
                     out.append(' ' if width == 0 else chr(width - 1))
                 rows.append(''.join(out))
         elif t < self._COVER + self._CLEAR:
-            # Uncover, right to left, so the part still covered is always the
-            # left of a cell and one glyph family does both passes.
+            # Right to left, so the covered part is always the left of a cell. See NOTES.md.
             edge = _ease_out((t - self._COVER) / self._CLEAR) * span
             for text in lines:
                 out = []
@@ -285,9 +277,7 @@ class MeterTease(Effect):
         return _compose(_centre(line1), _centre(line2))
 
 
-# --------------------------------------------------------------------------
-# Screensavers
-# --------------------------------------------------------------------------
+# ---- Screensavers --------------------------------------------------------
 
 class Wave(Effect):
     id = 'wave'
@@ -317,8 +307,7 @@ class Bounce(Effect):
     _STEP = 0.19
 
     def frame(self, t, line1, line2):
-        # Two columns spare, always: with no room to move it flips rows every
-        # frame, which reads as a flicker rather than a bounce.
+        # Two columns spare: with no room to move it flips rows every frame instead.
         text = (str(line1 or '').strip() or default_text())[:LCD_COLUMNS - 2]
         span = max(1, LCD_COLUMNS - len(text))
         step = int(t / self._STEP)
@@ -364,8 +353,7 @@ class BigClock(Effect):
     fps = 1
     uses_text = False
 
-    # Corner and bar pieces; the solid ROM block does the thick strokes, which is
-    # what keeps this inside 8 slots.
+    # Corner and bar pieces; the ROM block does the thick strokes, which is what fits 8 slots.
     _LT = [0x07, 0x0F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F]
     _UB = [0x1F, 0x1F, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00]
     _RT = [0x1C, 0x1E, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F]
@@ -411,8 +399,7 @@ class BigClock(Effect):
         now = self._now()
         digits = '%02d%02d' % (now.tm_hour, now.tm_min)
         rows = [[' '] * LCD_COLUMNS, [' '] * LCD_COLUMNS]
-        # HH:MM is 13 of the 16 columns; wander the spare ones so the phosphor
-        # does not wear a permanent clock into the panel.
+        # 13 of the 16 columns, so wander the spare ones and the phosphor wears evenly.
         col = 1 + now.tm_min % 3
         for index, ch in enumerate(digits):
             shape = self._DIGITS.get(ch)
@@ -430,9 +417,7 @@ class BigClock(Effect):
         return _compose(''.join(rows[0]), ''.join(rows[1]))
 
 
-# --------------------------------------------------------------------------
-# Registry
-# --------------------------------------------------------------------------
+# ---- Registry ------------------------------------------------------------
 
 BOOT_EFFECTS = (SplitFlap, PowerOnTest, Wipe, Typewriter, SlideIn, MeterTease)
 SCREENSAVER_EFFECTS = (Wave, Bounce, Marquee, Breathe, BigClock)
@@ -463,9 +448,8 @@ def screensaver_effect(effect_id):
 class EffectPlayer:
     """Renders one effect on the display until it finishes or is stopped.
 
-    Boot effects run inline on the caller's thread (``play()``); screensavers get
-    a thread of their own (``start()``). Both resync the bus on the way in and
-    out, for the same reason the level meter does -- see NOTES.md.
+    ``play()`` runs a boot effect inline; ``start()`` gives a screensaver its own
+    thread. Both resync the bus going in and out, as the level meter does.
     """
 
     def __init__(self, menu, effect, line1='', line2='', display=None, on_stop=None):
