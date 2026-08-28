@@ -8,22 +8,18 @@ logger = logging.getLogger("Volumio Functions")
 
 _INFO_DEBOUNCE_SECONDS = 0.4
 
-# Matches the toast display time, so "removed" is seen before the rebuilt menu
-# renders over it.
+# Matches the toast time, so "removed" is seen before the rebuilt menu renders over it.
 _REMOVE_REFRESH_DELAY_SECONDS = 2.0
 
-# Synthetic "play the whole container" entry. The URI travels in the entry
-# itself, so a menu restored from back-history still plays the right thing.
+# Synthetic "play the whole container" entry; the URI travels in it, so back-history still works.
 PLAYALL_URI_PREFIX = 'system://playall/'
 PLAYALL_NO_SERVICE = '-'
 
-# Item types whose contents can be queued as a whole. No URI pattern
-# generalises across services, so the type is the only shared signal.
-# Categories are excluded deliberately -- see NOTES.md ("Volumio quirks").
+# Types whose contents can be queued whole; no URI pattern generalises across
+# services. Categories are excluded deliberately - see NOTES.md ("Volumio quirks").
 CONTAINER_TYPES = ('playlist', 'album', 'artist', 'folder')
 
-# The uri -> (type, service) map accumulates rather than tracking one listing,
-# so it needs a bound. An evicted entry is re-learned on the next browse.
+# The uri -> (type, service) map accumulates, so it needs a bound. Evictions are re-learned.
 BROWSE_KIND_CACHE_MAX = 2000
 
 # set socketio logging
@@ -89,8 +85,7 @@ class Volumio:
         connect retries forever, which would block startup if it ran anywhere but
         this thread.
         """
-        # Retry until Volumio's socket.io server is up. Note tenacity takes
-        # seconds where the old `retrying` took milliseconds.
+        # Retry until Volumio's socket.io server is up. tenacity takes seconds, not milliseconds.
         @retry(wait=wait_fixed(1))
         def connect():
             self.sio.connect(url=self.ws_api)
@@ -229,8 +224,7 @@ class Volumio:
             self.get_sources(button)
             return
 
-        # Before SAFE_MENU_ITEM_REGEX below: "stop", "next" and "prev" all match
-        # it, and would otherwise be browsed for instead of acted on.
+        # Before SAFE_MENU_ITEM_REGEX: "stop", "next" and "prev" all match it and would be browsed for.
         action = self._button_actions().get(button)
         if action is not None:
             action()
@@ -266,9 +260,7 @@ class Volumio:
     def _process_remove_favourite_item(self, item):
         parsed = self._parse_favourite(item['remove_favourite'])
         if parsed is not None:
-            # Set the flag before sending so that any pushBrowseLibrary Volumio
-            # emits immediately in response to the removal is treated as a
-            # refresh (remember=False) rather than a user-navigated menu.
+            # Before sending, so the push Volumio emits in response counts as a refresh, not navigation.
             self._refresh_browse = True
             self.remove_favourite(*parsed)
             self._schedule_browse_refresh()
@@ -334,23 +326,20 @@ class Volumio:
 
     def _on_push_state(self, *args):
         try:
-            # Consume any pending force request (set by the info button). When
-            # forced we bypass dedup/debounce so the update shows immediately.
+            # Consume any info-button force request; forced updates bypass dedup/debounce.
             force = self._force_next_state
             self._force_next_state = False
 
             # logger.debug("State: " + str(args))
             state = args[0]
 
-            # Empty strings normalise to None so downstream only checks for None.
-            # Not `or None`: that would swallow a legitimate 0 bitrate too.
+            # Empty strings become None so downstream only checks None. Not `or None`: that eats a 0 bitrate.
             clean_state = {key: state.get(key) for key in self.STATE_KEYS}
             clean_state = {k: (None if v == "" else v) for k, v in clean_state.items()}
             status = clean_state['status']
 
-            # Drives the menu manager's idle screen. Decided here because a
-            # stop never reaches show_track_info. Pause counts as not playing;
-            # sent on change only, as radio re-pushes state constantly.
+            # Decided here because a stop never reaches show_track_info. Sent on change
+            # only, as radio re-pushes state constantly; pause counts as not playing.
             playing = status == 'play'
             if playing != self._last_playing:
                 self._last_playing = playing
@@ -362,17 +351,14 @@ class Volumio:
             # if theres too many missing items log it and skip the rest
             if status == 'play' and all_none:
                 logger.warning("Now playing item missing state")
-            # check if we're not actually playing anything.
-            # This happens between every track change so don't show anything in this instance else we spam the display with 'stop' events.
+            # Happens between every track change, so showing it would spam the display with stops.
             elif status != 'play' and all_none:
                 self.last_core_state = None  # allow same track to redisplay when playback resumes
                 message = json.dumps([{'message': 'No media is playing'}])
                 self.menuManagerQ.put({'message': message})
 
             else:
-                # Track text only, audio fields excluded: a radio station
-                # re-sending the same track with a jittering bitrate must not
-                # re-render and restart the LCD scroll.
+                # Track text only: a station re-sending with a jittering bitrate must not restart the scroll.
                 core_state = tuple(clean_state[k] for k in self.DEDUP_KEYS)
 
                 # wire format is a list of one
@@ -387,9 +373,8 @@ class Volumio:
                     logger.debug("State changed: %s", core_state)
                     self._schedule_info_update(result)
                 else:
-                    # Same track: refresh only if an update is still pending (not
-                    # yet shown), folding late audio details into the first render --
-                    # once shown, skip, since a radio re-send must not restart the scroll.
+                    # Same track: refresh only while still pending, folding in late audio
+                    # details. Once shown, skip - a re-send must not restart the scroll.
                     logger.debug("Duplicate state; refreshing only if still pending")
                     self._schedule_info_update(result, only_if_pending=True)
 
@@ -485,8 +470,7 @@ class Volumio:
         self._remember_browse_kinds(sources_list)
         result = json.dumps(sources_list)
         logger.debug("%s", result)
-        # Volumio emits a spurious empty push after removeFromFavourites; while
-        # the refresh timer is pending that is not the real re-browse.
+        # Volumio emits a spurious empty push after removeFromFavourites; the pending timer marks it.
         if not sources_list and self._refresh_timer is not None:
             logger.debug("Ignoring spurious empty pushBrowseLibrary while refresh timer is pending")
             return
@@ -509,8 +493,7 @@ class Volumio:
             item['service'] = item.pop('plugin_name', None)
 
         sources_list = self._format_browse_items(items)
-        # Backfilled in arrival order purely to force build_menu's position-sort
-        # path; without it the list sorts alphabetically. See NOTES.md.
+        # Backfilled in arrival order to force build_menu's position-sort path. See NOTES.md.
         if not any(item.get('position') is not None for item in sources_list):
             for index, item in enumerate(sources_list):
                 item['position'] = index
@@ -591,9 +574,8 @@ class Volumio:
     def get_sources(self, link: str) -> None:
         logger.debug("Get sources from %s", link)
         self._last_browse_uri = link
-        # Looked up before the response replaces the listing it came from --
-        # this is how we learn whether what we just entered is a playable
-        # container, and which service owns it.
+        # Before the response replaces the listing it came from: this is how we learn
+        # whether what we entered is a playable container, and which service owns it.
         self._last_browse_kind = self._browse_kinds.get(link)
         self._send('browseLibrary', {'uri': link})
 
@@ -624,9 +606,8 @@ class Volumio:
         NOTES.md ("Volumio quirks").
         """
         if not service:
-            # Only reached for an item that arrived without one. Inferring from
-            # the URI is the old behaviour, kept as a fallback -- note "spop",
-            # which is what the Spotify plugin actually registers as.
+            # Fallback for an item that arrived without one. Note "spop", which is
+            # what the Spotify plugin actually registers as.
             if self.WEBRADIO_URI_REGEX.match(uri):
                 service = 'webradio'
             elif self.SPOTIFY_TRACK_REGEX.match(uri):

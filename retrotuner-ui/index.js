@@ -5,12 +5,10 @@ var fs = require('fs-extra');
 var exec = require('child_process').exec;
 var execSync = require('child_process').execSync;
 
-// Dropped just before a self-triggered restart so the python service can tell a
-// restart (capture/settings save) apart from a genuine stop/shutdown.
+// Dropped before a self-triggered restart, so the python service can tell one from a real shutdown.
 var RESTART_MARKER_PATH = '/tmp/retrotuner-ui-restarting';
 
-// SPI does nothing without this line. Added rather than merely reported; only
-// a reboot loads the driver.
+// SPI does nothing without this line, and only a reboot loads the driver.
 var USERCONFIG_PATH = '/boot/userconfig.txt';
 var SPI_USERCONFIG_LINE = 'dtparam=spi=on';
 var SPI_USERCONFIG_COMMENT =
@@ -25,9 +23,8 @@ function isSpiEnabledInUserConfig() {
     }
 }
 
-// Ensure dtparam=spi=on is present. Returns 'present', 'added', or an error
-// string. Only a reboot actually loads the driver, so 'added' means the caller
-// must ask for one -- until then every MCP3008 read comes back as 0.
+// Ensure dtparam=spi=on is present. Returns 'present', 'added', or an error string.
+// 'added' means the caller must ask for a reboot; until then every MCP3008 read is 0.
 retrotunerui.prototype.ensureSpiInUserConfig = function () {
     const self = this;
     if (isSpiEnabledInUserConfig()) { return 'present'; }
@@ -39,8 +36,7 @@ retrotunerui.prototype.ensureSpiInUserConfig = function () {
         contents = '';   // absent is fine -- writing creates it
     }
 
-    // A file with no trailing newline would otherwise glue our line onto
-    // whatever came last, silently breaking both settings.
+    // Without this our line glues onto the last one, silently breaking both settings.
     if (contents.length > 0 && !contents.endsWith('\n')) { contents += '\n'; }
     contents += SPI_USERCONFIG_COMMENT + '\n' + SPI_USERCONFIG_LINE + '\n';
 
@@ -77,18 +73,15 @@ retrotunerui.prototype.onVolumioStart = function()
     return libQ.resolve();
 }
 
-// Audio tap for the level meter. Gated on the asound config being present so
-// the tap is never spliced into the output chain by accident.
+// Audio tap for the meter, gated on the asound config so it is never spliced in by accident.
 var AUDIO_TAP_CONF = 'rt_in.rt_out.2.conf';
 var AUDIO_TAP_FIFO = '/tmp/retrotuner-audio.fifo';
 
-// cava's config, rewritten in place from the settings page rather than
-// templated, so the notes in it survive.
+// Rewritten in place from the settings page rather than templated, so its notes survive.
 var CAVA_CONF = 'cava/retrotuner-cava.conf';
 
-// Replace one key inside one [section], or return null if it is not there.
-// Section-aware because "channels" appears in both [input] (the tap's channel
-// count) and [output] (the display mode), meaning different things.
+// Replace one key inside one [section], or null if it is not there. Section-aware
+// because "channels" means different things under [input] and [output].
 function replaceInIniSection(contents, sectionName, key, value) {
     const lines = contents.split('\n');
     const keyLine = new RegExp('^\\s*' + key + '\\s*=');
@@ -110,36 +103,72 @@ function replaceInIniSection(contents, sectionName, key, value) {
     return replaced ? lines.join('\n') : null;
 }
 
-// What each display mode needs from cava. Must match what the renderer expects
-// -- neither end scales anything. See the table in NOTES.md.
+// What each mode needs from cava; neither end scales anything. See the table in NOTES.md.
 var METER_MODES = {
-    mono:        { bars: 16, channels: 'mono',   range: 16 },
-    stereo:      { bars: 16, channels: 'stereo', range: 16 },
-    rows_edges:  { bars: 32, channels: 'stereo', range: 4 },
-    rows_centre: { bars: 32, channels: 'stereo', range: 4 }
+    mono:        { bars: 16, channels: 'mono',   range: 16, autosens: 1, sensitivity: 100 },
+    stereo:      { bars: 16, channels: 'stereo', range: 16, autosens: 1, sensitivity: 100 },
+    rows_edges:  { bars: 32, channels: 'stereo', range: 4,  autosens: 1, sensitivity: 100 },
+    rows_centre: { bars: 32, channels: 'stereo', range: 4,  autosens: 1, sensitivity: 100 },
+    // The only mode with autosens off: it normalises a quiet passage up to look
+    // like a loud one, which is the one thing a meter must not do.
+    vu:          { bars: 32, channels: 'stereo', range: 80, autosens: 0, sensitivity: 100 }
 };
 
-// Next to METER_MODES so the two cannot drift. A select renders blank until
-// getUIConfig hands it a label.
+// Next to METER_MODES so they cannot drift. A select renders blank until getUIConfig labels it.
 var METER_MODE_LABELS = {
     mono:        'Mono - 16 bands, full height',
     stereo:      'Stereo mirrored - 8 bands per channel',
     rows_edges:  'Stereo rows - grow in from the edges',
-    rows_centre: 'Stereo rows - grow out from the centre'
+    rows_centre: 'Stereo rows - grow out from the centre',
+    vu:          'VU meters - one level bar per channel, with peak hold'
 };
 
-// Settings whose value is a string rather than a number or boolean, with the
-// exact set each may hold. saveOptions validates against this.
-var STRING_SETTINGS = {
-    meter_mode: Object.keys(METER_MODES)
+// The display is 16 columns; boot and screensaver text is trimmed to it on save.
+var LCD_COLUMNS = 16;
+
+// Effect ids must match includes/effects.py, labels must match UIConfig.json.
+var BOOT_EFFECT_LABELS = {
+    none:       'None - straight to the menu',
+    splitflap:  'Split-flap - characters roll and settle',
+    post:       'Power-on self test - all segments, then dissolve',
+    wipe:       'Wipe - a curtain sweeps across and back',
+    typewriter: 'Typewriter - characters land one at a time',
+    slide:      'Slide-in - the rows arrive, hold, then leave again',
+    tease:      'Meter tease - bars rise, collapse, reveal the text',
+    centre:     'Centre-out reveal - curtains part from the middle'
 };
+var SCREENSAVER_EFFECT_LABELS = {
+    none:    'None - leave the menu on screen',
+    wave:    'Travelling wave - a sine scrolls across',
+    bounce:  'Bouncing text - drifts around the panel',
+    vu:      'VU meters - two bars with peak hold',
+    scanner: 'Scanner - a block sweeps back and forth',
+    rain:    'Data rain - characters cascade across'
+};
+var SCREENSAVER_TIMEOUT_LABELS = {
+    30: '30 seconds', 60: '1 minute', 120: '2 minutes',
+    300: '5 minutes', 600: '10 minutes', 1800: '30 minutes'
+};
+
+// String-valued settings and the exact set each may hold; saveOptions validates against this.
+var STRING_SETTINGS = {
+    meter_mode: Object.keys(METER_MODES),
+    boot_effect: Object.keys(BOOT_EFFECT_LABELS),
+    screensaver_effect: Object.keys(SCREENSAVER_EFFECT_LABELS)
+};
+
+// Free text rather than a fixed set, so isValid cannot check them against anything.
+var TEXT_SETTINGS = ['boot_line1', 'boot_line2', 'screensaver_line1'];
 
 retrotunerui.prototype.meterModeLabel = function (mode) {
     return METER_MODE_LABELS[mode] || METER_MODE_LABELS.mono;
 };
 
-// Push the meter settings into cava's config. Both are written together because
-// both are only read when cava starts, so they share one restart.
+retrotunerui.prototype.effectLabel = function (labels, id, fallback) {
+    return labels[id] || labels[fallback];
+};
+
+// Written together because cava only reads them at startup, so they share one restart.
 retrotunerui.prototype.applyCavaSettings = function () {
     const self = this;
     const conf = __dirname + '/' + CAVA_CONF;
@@ -149,6 +178,8 @@ retrotunerui.prototype.applyCavaSettings = function () {
     const wanted = [
         ['general', 'framerate', rate],
         ['general', 'bars', mode.bars],
+        ['general', 'autosens', mode.autosens],
+        ['general', 'sensitivity', mode.sensitivity],
         ['output', 'channels', mode.channels],
         ['output', 'ascii_max_range', mode.range]
     ];
@@ -159,9 +190,8 @@ retrotunerui.prototype.applyCavaSettings = function () {
         for (const [section, key, value] of wanted) {
             const updated = replaceInIniSection(contents, section, key, value);
             if (updated === null) {
-                // The key was renamed or removed. Saying so is the point: cava
-                // would silently keep its old value and the analyser would run
-                // differently from what the settings page claims.
+                // Renamed or removed. Silence would leave cava on its old value,
+                // analysing differently from what the settings page claims.
                 self.logger.error('RetroTuner UI - no ' + key + ' under [' + section + '] in ' +
                     conf + '; cava settings unchanged');
                 return false;
@@ -184,15 +214,13 @@ retrotunerui.prototype.setupAudioTap = function () {
     const conf = __dirname + '/asound/' + AUDIO_TAP_CONF;
 
     if (!fs.existsSync(conf)) {
-        // Logged rather than silent: otherwise "no audio tap" on the display is
-        // indistinguishable from this code never having run at all.
+        // Logged, or "no audio tap" on the display looks identical to this never running.
         self.logger.info('RetroTuner UI - audio tap not enabled (no ' + conf + ')');
         return false;
     }
 
-    // volumiofifo writes the fifo but does not create it. Reuse an existing
-    // one: recreating gives the path a new inode while cava keeps reading the
-    // old, now-unlinked one, which no writer can ever reach.
+    // volumiofifo writes the fifo but does not create it. Reuse an existing one:
+    // recreating leaves cava reading the old, unlinked inode no writer can reach.
     try {
         let usable = false;
         try {
@@ -203,8 +231,7 @@ retrotunerui.prototype.setupAudioTap = function () {
 
         if (!usable) {
             fs.removeSync(AUDIO_TAP_FIFO);   // a stale regular file would wedge it
-            // As the volumio user, not root: this process runs as root (see
-            // serviceCmds) and cava does not.
+            // As the volumio user, not root: this process runs as root and cava does not.
             execSync('/usr/bin/mkfifo -m 646 ' + AUDIO_TAP_FIFO, { uid: 1000, gid: 1000 });
             self.logger.info('RetroTuner UI - created audio tap fifo ' + AUDIO_TAP_FIFO);
         }
@@ -212,8 +239,7 @@ retrotunerui.prototype.setupAudioTap = function () {
         self.logger.error('RetroTuner UI - could not prepare audio tap fifo: ' + e);
     }
 
-    // Volumio only folds plugin asound/ files into /etc/asound.conf when asked;
-    // nothing does it implicitly on plugin start.
+    // Volumio only folds plugin asound/ files into /etc/asound.conf when asked.
     try {
         self.commandRouter.executeOnPlugin('audio_interface', 'alsa_controller', 'updateALSAConfigFile');
         self.logger.info('RetroTuner UI - audio tap enabled (' + AUDIO_TAP_CONF + ')');
@@ -229,16 +255,14 @@ retrotunerui.prototype.onStart = function() {
 
     const tapEnabled = self.setupAudioTap();
 
-    // SPI is on by default, so a fresh install would otherwise never add the
-    // boot parameter -- no settings save ever happens. Logged rather than
-    // shown as a modal, since there may be no browser session at boot.
+    // A fresh install never saves settings, so nothing else would add the boot
+    // parameter. Logged, not a modal: there may be no browser session at boot.
     if (Boolean(self.config.get('spi')) && self.ensureSpiInUserConfig() === 'added') {
         self.logger.warn('RetroTuner UI - SPI enabled in ' + USERCONFIG_PATH +
             '; a reboot is required before the MCP3008 can be read');
     }
 
-    // meter_stereo (a switch) became meter_mode (a select). Carry the old
-    // choice across once, then drop the dead key.
+    // meter_stereo (switch) became meter_mode (select): carry the choice across once, then drop it.
     if (self.config.has('meter_stereo')) {
         if (Boolean(self.config.get('meter_stereo')) &&
             String(self.config.get('meter_mode', 'mono')) === 'mono') {
@@ -248,8 +272,7 @@ retrotunerui.prototype.onStart = function() {
         self.config.delete('meter_stereo');
     }
 
-    // A plugin update reinstalls the cava config with its shipped defaults
-    // while config.json keeps the user's choice. Reapply or the two diverge.
+    // An update reinstalls cava's config with shipped defaults; reapply or it diverges from config.json.
     if (tapEnabled) {
         self.applyCavaSettings();
     }
@@ -257,8 +280,7 @@ retrotunerui.prototype.onStart = function() {
     // Start pigpiod first (the python controls connect to it), then our service.
     return self.pigpiodServiceCmds('start')
         .then(function () {
-            // Only when the tap is installed: without the tap cava has nothing
-            // to read, and with the tap but no cava, playback stalls.
+            // Only with the tap installed: no tap and cava reads nothing, tap and no cava stalls playback.
             return tapEnabled ? self.cavaServiceCmds('start') : libQ.resolve();
         })
         .then(function () { return self.retrotuneruiServiceCmds('start'); })
@@ -277,21 +299,17 @@ retrotunerui.prototype.onStop = function() {
 retrotunerui.prototype.onRestart = function() {
     var self = this;
 
-    // Mark this as our own restart so the controls don't show the shutdown
-    // screen (only genuine stops/shutdowns should).
+    // Mark this as our own restart, so the controls do not show the shutdown screen.
     try { fs.writeFileSync(RESTART_MARKER_PATH, String(Date.now())); }
     catch (e) { self.logger.error('RetroTuner UI - could not write restart marker: ' + e); }
 
-    // 'start' not 'restart' for pigpiod: a restart races the controls' pigpio
-    // reconnect and kills the encoder. cava is left alone -- see NOTES.md.
+    // 'start' not 'restart' for pigpiod: a restart races the pigpio reconnect and kills the encoder.
     return self.pigpiodServiceCmds('start')
         .then(function () { return self.retrotuneruiServiceCmds('restart'); })
         .fail(function (e) { self.logger.error('RetroTuner UI - error restarting: ' + e); });
 };
 
-// Called from the "Restart Now" button of the SPI-mode-changed modal (see
-// saveOptions) via Volumio's callMethod mechanism -- a plugin restart can't
-// apply an SPI/bitbang switch, only a full device reboot re-probes the pin mux.
+// "Restart Now" on the SPI-mode-changed modal, via callMethod. Only a reboot re-probes the pin mux.
 retrotunerui.prototype.rebootNow = function () {
     this.commandRouter.reboot();
     return libQ.resolve();
@@ -312,9 +330,7 @@ retrotunerui.prototype.getUIConfig = function() {
         __dirname + '/i18n/strings_en.json',
         __dirname + '/UIConfig.json')
         .then(function (uiconf) {
-            // Look sections and content up by id, not numeric index, so adding or
-            // reordering sections can never silently shift indices (which has
-            // broken this page before).
+            // By id, not numeric index: reordering sections has silently broken this page before.
             function section(id) {
                 return uiconf.sections.find(function (s) { return s.id === id; });
             }
@@ -334,9 +350,8 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(pins, 'buttons_channel1', self.config.get('buttons_channel1'));
             setValue(pins, 'buttons_channel2', self.config.get('buttons_channel2'));
 
-            // Capture section: action buttons have no stored values, but we
-            // rewrite each "Configure" label to show its current mapping so the
-            // user can see what's set without opening the Advanced section.
+            // Action buttons store no values, but each "Configure" label shows its
+            // current mapping, so the user can see what is set without opening Advanced.
             const capture = section('button_capture');
             if (capture) {
                 capture.content.forEach(function (item) {
@@ -349,8 +364,7 @@ retrotunerui.prototype.getUIConfig = function() {
                 });
             }
 
-            // A select carries its own label, so setting a bare number would
-            // leave the control blank until the user opened the dropdown.
+            // A select carries its own label; a bare number leaves the control blank.
             const meterRate = parseInt(self.config.get('meter_framerate', 60), 10) || 60;
             setValue(section('level_meter'), 'meter_framerate',
                      { value: meterRate, label: meterRate + ' fps' });
@@ -358,14 +372,31 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(section('level_meter'), 'meter_mode',
                      { value: meterMode, label: self.meterModeLabel(meterMode) });
 
+            // Defaults match effects.py, so an older config shows what it will actually do.
+            const screen = section('screen_effects');
+            const bootEffect = String(self.config.get('boot_effect', 'splitflap'));
+            setValue(screen, 'boot_effect',
+                     { value: bootEffect,
+                       label: self.effectLabel(BOOT_EFFECT_LABELS, bootEffect, 'splitflap') });
+            setValue(screen, 'boot_line1', self.config.get('boot_line1', ''));
+            setValue(screen, 'boot_line2', self.config.get('boot_line2', ''));
+            const saverEffect = String(self.config.get('screensaver_effect', 'wave'));
+            setValue(screen, 'screensaver_effect',
+                     { value: saverEffect,
+                       label: self.effectLabel(SCREENSAVER_EFFECT_LABELS, saverEffect, 'wave') });
+            setValue(screen, 'screensaver_line1', self.config.get('screensaver_line1', ''));
+            const saverTimeout = parseInt(self.config.get('screensaver_timeout', 120), 10) || 120;
+            setValue(screen, 'screensaver_timeout',
+                     { value: saverTimeout,
+                       label: SCREENSAVER_TIMEOUT_LABELS[saverTimeout] || (saverTimeout + ' seconds') });
+
             // Also new -- default matches apply_log_level()'s own fallback in index.py.
             setValue(section('diagnostics'), 'debug_mode', self.config.get('debug_mode', false));
 
             const encoder = section('encoder');
             setValue(encoder, 'rot_enc_A', self.config.get('rot_enc_A'));
             setValue(encoder, 'rot_enc_B', self.config.get('rot_enc_B'));
-            // New setting -- default matches menu_manager's own fallback for an
-            // older config that predates it (rotary skip stays off).
+            // Default matches menu_manager's fallback for a config predating it (skip stays off).
             setValue(encoder, 'rotary_skip_track', self.config.get('rotary_skip_track', false));
 
             const lcd = section('lcd');
@@ -380,8 +411,7 @@ retrotunerui.prototype.getUIConfig = function() {
             setValue(advanced, 'button_poll_rate', self.config.get('button_poll_rate'));
             setValue(advanced, 'button_debounce_rate', self.config.get('button_debounce_rate'));
             setValue(advanced, 'button_cooldown_rate', self.config.get('button_cooldown_rate'));
-            // Defaults matter: without them an old config leaves the field
-            // blank and Save submits "". Must match controls.py.
+            // Without defaults an old config leaves the field blank and Save submits empty. Match controls.py.
             setValue(advanced, 'button_samples', self.config.get('button_samples', 5));
             setValue(advanced, 'button_hysteresis', self.config.get('button_hysteresis', 6));
             defer.resolve(uiconf);
@@ -397,20 +427,21 @@ retrotunerui.prototype.getUIConfig = function() {
 retrotunerui.prototype.saveOptions = function (data) {
     const self = this;
 
-    // Captured before the save loop below overwrites it. A plugin restart
-    // can't apply this -- the pin mux is only reapplied when the SPI driver
-    // probes at boot -- so this is flagged separately from the usual restart.
+    // Captured before the save loop overwrites it. Flagged separately from the usual
+    // restart: only a boot-time driver probe reapplies the pin mux.
     const spiModeChanged = data.hasOwnProperty('spi') &&
         Boolean(data.spi) !== Boolean(self.config.get('spi'));
 
-    // Switches, numbers, and the string selects declared above. Button
-    // mappings bypass this entirely -- the capture flow writes them directly.
+    // Switches, numbers and the string selects above. The capture flow writes button mappings directly.
     function isValid(key, value) {
-        // A select posts a string. Rather than loosening this to accept any
-        // string -- which would let a typo through into cava's config -- each
-        // such field declares the exact set it may hold.
+        // A select posts a string; each such field declares the exact set it may hold,
+        // rather than accepting any string and letting a typo reach cava.
         if (STRING_SETTINGS.hasOwnProperty(key)) {
             return STRING_SETTINGS[key].indexOf(value) !== -1;
+        }
+        // Free text: anything goes, already trimmed to the display width below.
+        if (TEXT_SETTINGS.indexOf(key) !== -1) {
+            return typeof value === 'string';
         }
         if (typeof value === 'boolean') {
             return true;
@@ -418,17 +449,24 @@ retrotunerui.prototype.saveOptions = function (data) {
         return !isNaN(parseFloat(value)) && isFinite(value);
     }
 
-    // A select posts {value, label}; everything else posts a bare value. Flatten
-    // it before the validation loop below, which only understands numbers and
-    // booleans and would otherwise reject the whole field.
-    for (const key of ['meter_framerate', 'meter_mode']) {
+    // A select posts {value, label}; flatten it before the validation loop, which
+    // only understands numbers and booleans and would reject the whole field.
+    for (const key of ['meter_framerate', 'meter_mode', 'boot_effect',
+                       'screensaver_effect', 'screensaver_timeout']) {
         if (data.hasOwnProperty(key) && data[key] !== null && typeof data[key] === 'object') {
             data[key] = data[key].value;
         }
     }
 
-    // Captured before the save loop overwrites them. Only a real change is worth
-    // bouncing cava for -- see the restart below.
+    // Trimmed here rather than at render time, so the config never holds text the panel cannot show.
+    for (const key of TEXT_SETTINGS) {
+        if (data.hasOwnProperty(key)) {
+            const text = (data[key] === null || data[key] === undefined) ? '' : String(data[key]);
+            data[key] = text.slice(0, LCD_COLUMNS);
+        }
+    }
+
+    // Captured before the save loop overwrites them; only a real change is worth bouncing cava.
     const meterRateChanged = data.hasOwnProperty('meter_framerate') &&
         parseInt(data.meter_framerate, 10) !== parseInt(self.config.get('meter_framerate', 60), 10);
     const meterModeChanged = data.hasOwnProperty('meter_mode') &&
@@ -460,15 +498,13 @@ retrotunerui.prototype.saveOptions = function (data) {
     self.logger.info('RetroTuner UI - settings saved');
     this.commandRouter.pushToastMessage('success', ("RetroTuner UI"), this.commandRouter.getI18nString("COMMON.CONFIGURATION_UPDATE_DESCRIPTION"));
 
-    // SPI is the default mode, so the boot config is checked whenever SPI is on
-    // -- not only when the switch changes -- otherwise a fresh install never
-    // gets the line added at all.
+    // Checked whenever SPI is on, not only when the switch changes: SPI is the
+    // default, so a fresh install would never get the line added at all.
     const bootConfig = Boolean(self.config.get('spi')) ? self.ensureSpiInUserConfig() : 'present';
     const rebootPending = spiModeChanged || bootConfig === 'added';
 
     if (bootConfig !== 'present' && bootConfig !== 'added') {
-        // Writing failed (read-only /boot, permissions). Rebooting would not
-        // help, so don't offer a "Restart Now" that leads nowhere.
+        // Write failed (read-only /boot, permissions); a reboot would not help, so offer no button.
         self.commandRouter.broadcastMessage('openModal', {
             title: 'SPI Mode Enabled -- Boot Config Not Writable',
             message: 'SPI mode is enabled, but "' + SPI_USERCONFIG_LINE + '" could not be added to ' +
@@ -478,8 +514,7 @@ retrotunerui.prototype.saveOptions = function (data) {
             buttons: [{ name: 'OK', class: 'btn btn-default' }]
         });
     } else if (rebootPending) {
-        // Same shape as Volumio's own "I2S DAC enabled" prompt: a modal with a
-        // one-click restart, since a plugin restart can't apply either change.
+        // Same shape as Volumio's "I2S DAC enabled" prompt - a plugin restart cannot apply either change.
         self.commandRouter.broadcastMessage('openModal', {
             title: bootConfig === 'added' ? 'SPI Enabled -- Reboot Required' : 'SPI Mode Changed',
             message: bootConfig === 'added'
@@ -502,9 +537,8 @@ retrotunerui.prototype.saveOptions = function (data) {
         });
     }
 
-    // cava only reads these at startup, so it has to be bounced -- which
-    // onRestart never does, because an unread tap stalls playback. Gated on an
-    // actual change for that reason; usually inaudible, but not risk-free.
+    // cava only reads these at startup, so it has to be bounced - which onRestart
+    // never does, an unread tap stalling playback. Gated on a real change for that reason.
     if (meterChanged && !rebootPending) {
         if (self.applyCavaSettings()) {
             self.commandRouter.pushToastMessage('info', 'RetroTuner UI',
@@ -518,8 +552,7 @@ retrotunerui.prototype.saveOptions = function (data) {
     const noConflicts = self._checkButtonConflicts();  // always run: pushes its own toast on conflict
 
     if (rebootPending) {
-        // Only a reboot re-probes the pin mux, and restarting now would open
-        // an SPI device that does not exist yet and crash the controls thread.
+        // Only a reboot re-probes the pin mux; restarting now opens a device that is not there yet.
         self.logger.info('RetroTuner UI - reboot pending; not restarting the plugin');
     } else if (noConflicts) {
         self.logger.info('RetroTuner UI - restarting services');
@@ -543,21 +576,17 @@ var CAPTURE_IDLE_TIMEOUT_MS = 90000;  // auto-resume controls after this much in
 var CAPTURE_POLL_MS = 200;
 var BASELINE_SETTLE_MS = 5000;  // how long the user must leave the buttons alone
 
-// Capture works on raw ADC readings, which never land on exactly the same
-// count twice, so confirming a capture is a tolerance test and what gets
-// stored is a band around the midpoint of the two readings.
+// Raw ADC readings never repeat exactly, so a capture is confirmed by tolerance and
+// stored as a band around the midpoint of the two readings.
 var ADC_MAX = 1023;
-// Sized against a measured 69-141 count gap between adjacent buttons, and wide
-// enough for contact resistance. See NOTES.md ("Button reading").
+// Sized against the measured 69-141 gap, wide enough for contact resistance. See NOTES.md.
 var CAPTURE_CONFIRM_TOLERANCE = 15;  // counts two presses may differ by and still confirm
 var CAPTURE_BAND_HALF_WIDTH = 25;    // half-width of the band written to the config
 
-// Raw 0 is what an unreachable MCP3008 returns on every channel, so no band may
-// claim it -- otherwise a dead SPI bus reads as one button held down forever.
+// An unreachable MCP3008 returns 0 on every channel, so no band may claim it.
 var MIN_BAND_VALUE = 1;
 
-// The band a captured reading is stored as. One definition: a press and a
-// resting value are banded the same way, and the clamps only exist once.
+// One definition, so a press and a resting value are banded alike and the clamps exist once.
 function bandAround(centre) {
     return Math.max(centre - CAPTURE_BAND_HALF_WIDTH, MIN_BAND_VALUE) + '-' +
            Math.min(centre + CAPTURE_BAND_HALF_WIDTH, ADC_MAX);
@@ -577,9 +606,7 @@ var CAPTURE_LABELS = {
     btn_back: 'Back'
 };
 
-// Pushes the current getUIConfig() output to any open settings page, so a
-// value changed here (capture, clear, base resistance) shows up immediately
-// instead of needing a manual page reload.
+// Push getUIConfig() to any open settings page, so a value changed here shows without a reload.
 retrotunerui.prototype._refreshUiConfig = function () {
     const self = this;
     self.commandRouter.getUIConfigOnPlugin('user_interface', 'retrotuner-ui', {})
@@ -631,9 +658,8 @@ retrotunerui.prototype.captureBtnDimmer = function () { return this.startCapture
 retrotunerui.prototype.captureBtnMainMenu = function () { return this.startCapture('btn_main_menu'); };
 retrotunerui.prototype.captureBtnBack = function () { return this.startCapture('btn_back'); };
 
-// Clear the button currently selected for capture. Folded into the same
-// staged session as capturing, so one "Save & Restart Controls" applies both --
-// choose the button via "Configure", then click "Clear Selected Button".
+// Clear the button selected for capture. Staged with capture, so one "Save & Restart
+// Controls" applies both: choose via "Configure", then "Clear Selected Button".
 retrotunerui.prototype.clearSelectedButton = function () {
     const self = this;
     const session = self._captureSession;
@@ -661,8 +687,7 @@ retrotunerui.prototype.clearSelectedButton = function () {
     return libQ.resolve();
 };
 
-// Begin a capture session, pausing the controls until save or idle. False if
-// it could not start.
+// Begin a capture session, pausing the controls until save or idle. False if it could not start.
 retrotunerui.prototype.ensureCaptureSession = function () {
     const self = this;
     if (self._captureSession) { return true; }
@@ -725,8 +750,7 @@ retrotunerui.prototype.pollCapture = function () {
 
     if (!session.target) { return; }   // a press arrived but no button is selected yet
 
-    // Each new seq is one detected physical press (Python already filters out
-    // the resting value and key-release).
+    // One new seq is one physical press; python filters resting values and releases.
     const ch = reading.channel;
     const val = reading.value;
 
@@ -738,14 +762,12 @@ retrotunerui.prototype.pollCapture = function () {
     }
 
     if (session.candidate.channel === ch && Math.abs(session.candidate.value - val) <= CAPTURE_CONFIRM_TOLERANCE) {
-        // Store a band around the midpoint of the two presses. A raw reading is
-        // never identical twice, so a point value could never match again.
+        // A band around the midpoint of the two presses: a raw reading is never identical twice.
         const centre = Math.round((session.candidate.value + val) / 2);
         const configValue = ch + ', ' + bandAround(centre);
         if (!self._capturedValues) { self._capturedValues = {}; }
 
-        // Auto-reassign: if this value already belongs to other actions, clear
-        // them so the physical button now triggers only the action just learnt.
+        // Auto-reassign: clear any other action holding this value, so the button triggers only this one.
         const displaced = self._findConflictingButtons(session.target, ch, centre);
         displaced.forEach(function (other) {
             self.config.set(other.key, '');
@@ -773,8 +795,7 @@ retrotunerui.prototype.pollCapture = function () {
     }
 };
 
-// Read back the resting value of both ADC channels; python measures it when
-// capture starts, so this just needs the buttons left alone for a moment.
+// Resting value of both ADC channels, measured by python at capture start.
 retrotunerui.prototype.captureBaseResistance = function () {
     const self = this;
 
@@ -922,13 +943,11 @@ retrotunerui.prototype._checkButtonConflicts = function () {
 
 // Plugin methods -----------------------------------------------------------------------------
 
-// Run a systemctl command asynchronously so Volumio's event loop is never
-// blocked while systemd works (a restart can wait on the old process to stop).
+// Async, so Volumio's event loop never blocks while systemd waits on the old process to stop.
 retrotunerui.prototype.systemctl = function (cmd, unit) {
     var self = this;
 
-    // try-restart bounces a unit only if already running, so a meter settings
-    // change never starts cava on a box with no audio tap.
+    // try-restart only bounces a running unit, so this never starts cava on a box with no tap.
     if (!['start', 'stop', 'restart', 'try-restart'].includes(cmd)) {
         return libQ.reject(new TypeError('Unknown systemd command: ' + cmd));
     }
@@ -958,8 +977,7 @@ retrotunerui.prototype.pigpiodServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'pigpiod.service');
 };
 
-// Must run for as long as the tap is in the ALSA chain, not just while the
-// meter is on screen: an unread fifo stalls playback.
+// Must run for as long as the tap is in the ALSA chain, not just while the meter is on screen.
 retrotunerui.prototype.cavaServiceCmds = function (cmd) {
     return this.systemctl(cmd, 'retrotuner-cava.service');
 };

@@ -15,30 +15,39 @@ logger = logging.getLogger("Level Meter")
 LCD_COLUMNS = 16
 LCD_ROWS = 2
 
-# Rows of pixels in one character cell. Two rows of cells give 16 vertical steps
-# per column, which is what cava's ascii_max_range is set to.
+# Pixel rows per character cell; two cells give the 16 steps cava's ascii_max_range sends.
 CELL_ROWS = 8
 MAX_LEVEL = CELL_ROWS * LCD_ROWS
 
-# Display modes. The first two stack both rows into one tall bar and differ only
-# in what cava sends; the "rows" pair give each channel a row of its own.
+# The first two stack both rows into one tall bar; the "rows" pair give each channel a row.
 MODE_MONO = 'mono'                # 16 bands, full height
 MODE_STEREO = 'stereo'            # cava mirrors L/R about the centre, 8 bands each
 MODE_ROWS_EDGES = 'rows_edges'    # L hangs from the top, R rises from the bottom
 MODE_ROWS_CENTRE = 'rows_centre'  # L grows up from the middle, R grows down
-SUPPORTED_MODES = (MODE_MONO, MODE_STEREO, MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
+MODE_VU = 'vu'                    # not a spectrum: one level bar per channel
+SUPPORTED_MODES = (MODE_MONO, MODE_STEREO, MODE_ROWS_EDGES, MODE_ROWS_CENTRE,
+                   MODE_VU)
 SPLIT_MODES = (MODE_ROWS_EDGES, MODE_ROWS_CENTRE)
 
-# Height steps per channel in the split modes: two glyph sets (one growing up,
-# one down) share the 8 CGRAM slots, so four each. See NOTES.md.
+# Split modes need two glyph sets (one up, one down) in 8 CGRAM slots, so four each. See NOTES.md.
 SPLIT_LEVELS = 4
 SPLIT_CELL_STEP = CELL_ROWS // SPLIT_LEVELS   # pixel rows added per level
 
-# 0-7 are the only CGRAM slots there are, and staying inside them also keeps
-# 0x0A ("\n", a line break to lcd_render) out of frames.
+# The only CGRAM slots there are - and staying inside them keeps 0x0A ("\n") out of frames.
 BAR_GLYPHS = tuple(range(8))                  # full-height modes: heights 1..8
 SPLIT_UP_GLYPHS = tuple(range(0, 4))          # anchored to the bottom of the cell
 SPLIT_DOWN_GLYPHS = tuple(range(4, 8))        # anchored to the top of the cell
+
+# VU draws sideways, so a row is 16 cells x 5 pixel columns rather than 16 steps.
+VU_COLUMNS = LCD_COLUMNS * 5
+VU_FILL_GLYPHS = tuple(range(5))   # a cell filled 1..5 columns from the left
+VU_PEAK_GLYPH = 5                  # one lit column, the peak-hold marker
+# Fast up, slow down. Without this it follows every frame and reads as a spectrum.
+VU_ATTACK = 0.55
+VU_RELEASE = 0.12
+# The peak sits still, then slides back rather than snapping to the bar.
+VU_PEAK_HOLD = 1.2                 # seconds before it starts to fall
+VU_PEAK_FALL = 40.0                # sub-columns per second once it does
 
 # cava's raw ascii output: one line per frame, values separated by ";".
 DEFAULT_BARS_PATH = "/tmp/retrotuner-bars"
@@ -46,20 +55,16 @@ BAR_SEPARATOR = ';'
 
 # One frame is ~50 bytes, so this holds a healthy backlog without a big read.
 READ_CHUNK = 4096
-# Guard against a stream that never contains a newline (wrong output format, or
-# something other than cava writing) growing the buffer forever.
+# Bound on a stream that never sends a newline - wrong format, or not cava at all.
 MAX_PENDING = 64 * 1024
 
-# Default draw rate; must match "framerate" in cava/retrotuner-cava.conf. Both
-# are overridden together from the settings page.
+# Must match "framerate" in cava/retrotuner-cava.conf; the settings page sets both together.
 FRAMES_PER_SECOND = 60
 FRAME_INTERVAL = 1.0 / FRAMES_PER_SECOND
 
-# Offered in the settings UI. 15 is the escape hatch if the meter competes with
-# button polling; 120 is near what the display can be driven at.
+# 15 is the escape hatch if the meter competes with button polling; 120 is near the display's ceiling.
 SUPPORTED_FRAME_RATES = (15, 30, 60, 120)
-# Quiet before "NO AUDIO". cava's decay counts as signal, so what you see is a
-# few seconds longer. Long on purpose: a false alarm between tracks is worse.
+# Quiet before "NO AUDIO", and long on purpose - a false alarm between tracks is worse.
 SILENCE_TIMEOUT = 10.0
 
 
@@ -102,6 +107,52 @@ def split_bitmaps():
     for height in range(SPLIT_CELL_STEP, CELL_ROWS + 1, SPLIT_CELL_STEP):
         glyphs.append([0b11111] * height + [0b00000] * (CELL_ROWS - height))
     return glyphs
+
+
+def vu_bitmaps():
+    """Six glyphs: a cell filled 1-5 columns, plus the peak-hold marker."""
+    glyphs = []
+    for width in range(1, 6):
+        bits = 0
+        for column in range(width):
+            bits |= 0b10000 >> column
+        glyphs.append([bits] * CELL_ROWS)
+    glyphs.append([0b00100] * CELL_ROWS)
+    return glyphs
+
+
+def vu_level(levels):
+    """One reading from a channel's bands: the mean, which tracks loudness.
+
+    The loudest band would follow whichever frequency happens to dominate and
+    jump about; the mean sits where the music is.
+    """
+    if not levels:
+        return 0.0
+    return float(sum(levels)) / len(levels)
+
+
+def render_vu_row(level, peak):
+    """One horizontal bar with its peak marker, in 80 sub-column steps."""
+    filled = max(0, min(VU_COLUMNS, int(round(level))))
+    peak_cell = max(0, min(LCD_COLUMNS - 1,
+                           int(max(0, min(VU_COLUMNS, peak))) // 5))
+    row = []
+    for column in range(LCD_COLUMNS):
+        width = max(0, min(5, filled - column * 5))
+        if width > 0:
+            row.append(chr(VU_FILL_GLYPHS[width - 1]))
+        elif column == peak_cell and peak > 0:
+            row.append(chr(VU_PEAK_GLYPH))
+        else:
+            row.append(' ')
+    return ''.join(row)
+
+
+def render_vu(left, right, left_peak, right_peak):
+    """Two horizontal bars, left channel on the top row."""
+    return '%s\n%s' % (render_vu_row(left, left_peak),
+                        render_vu_row(right, right_peak))
 
 
 def split_channels(levels):
@@ -207,10 +258,28 @@ class LevelMeter:
         self._thread = None
         self._stop = threading.Event()
         self._glyphs_loaded = False
+        # VU ballistics, per channel. Only the VU mode touches these.
+        self._vu = [0.0, 0.0]
+        self._vu_peak = [0.0, 0.0]
+        self._vu_peak_at = [0.0, 0.0]
 
     @property
     def _split(self):
         return self._mode in SPLIT_MODES
+
+    def _step_vu(self, channel, target, now):
+        """Advance one channel's needle and its peak marker. Returns both."""
+        level = self._vu[channel]
+        level += (target - level) * (VU_ATTACK if target > level else VU_RELEASE)
+        self._vu[channel] = level
+
+        if level >= self._vu_peak[channel]:
+            self._vu_peak[channel] = level
+            self._vu_peak_at[channel] = now
+        elif now - self._vu_peak_at[channel] > VU_PEAK_HOLD:
+            fall = VU_PEAK_FALL * self._frame_interval
+            self._vu_peak[channel] = max(level, self._vu_peak[channel] - fall)
+        return level, self._vu_peak[channel]
 
     @property
     def running(self):
@@ -258,18 +327,50 @@ class LevelMeter:
         except Exception:
             return False
 
+    def _resync_display(self):
+        """Re-run the display's 4-bit handshake at a meter boundary.
+
+        Not the safety net -- the library resyncs periodically on its own. This
+        covers the two moments most exposed to a desync, and where a lost frame
+        costs nothing: 60fps about to start, and the menu about to come back
+        after it. See NOTES.md ("Display driver").
+        """
+        resync = getattr(self._menu, 'resync_display', None)
+        if resync is None:
+            # Older rpi-lcd-menu without the recovery path; see requirements.txt.
+            return
+        try:
+            resync()
+        except Exception as e:
+            logger.debug("Display resync failed: %s", e)
+
     def _load_glyphs(self):
         """Fill CGRAM with this mode's glyph set. Once per run: the mode cannot
         change without a settings save, which restarts the service."""
         if self._glyphs_loaded:
             return
-        bitmaps = split_bitmaps() if self._split else bar_bitmaps()
+        if self._mode == MODE_VU:
+            bitmaps = vu_bitmaps()
+        else:
+            bitmaps = split_bitmaps() if self._split else bar_bitmaps()
         for location, bitmap in enumerate(bitmaps):
             self._menu.create_char(location, bitmap)
         self._glyphs_loaded = True
 
     def _build_frame(self, line):
         """Turn one cava line into a frame, or None if it carried no levels."""
+        if self._mode == MODE_VU:
+            levels = parse_bars(line, max_level=VU_COLUMNS,
+                                columns=LCD_COLUMNS * 2)
+            if not levels:
+                return None, levels
+            left, right = split_channels(levels)
+            now = time.monotonic()
+            left_level, left_peak = self._step_vu(0, vu_level(left), now)
+            right_level, right_peak = self._step_vu(1, vu_level(right), now)
+            return render_vu(left_level, right_level,
+                             left_peak, right_peak), levels
+
         if self._split:
             levels = parse_bars(line, max_level=SPLIT_LEVELS,
                                 columns=LCD_COLUMNS * 2)
@@ -290,9 +391,9 @@ class LevelMeter:
         last_sound = time.monotonic()
         showing_silence = False
         try:
+            self._resync_display()
             self._load_glyphs()
-            # Non-blocking so the button press cannot hang, and a raw fd
-            # because readline() cannot express "nothing yet" from end of file.
+            # Non-blocking, and a raw fd: readline() can't say "nothing yet" at end of file.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
 
             while not self._stop.is_set():
@@ -307,8 +408,7 @@ class LevelMeter:
                     if chunk:
                         pending += chunk
 
-                # Newest complete line, backlog discarded: a stale frame is
-                # worse than a skipped one.
+                # Newest complete line only - a stale frame is worse than a skipped one.
                 latest = None
                 if b'\n' in pending:
                     parts = pending.split(b'\n')
@@ -318,8 +418,7 @@ class LevelMeter:
                             latest = line.decode('ascii', 'replace')
                             break
 
-                # A stream with no newline is either not cava or badly broken;
-                # don't let the buffer grow without bound waiting for one.
+                # Not cava, or badly broken. Don't grow the buffer waiting for a newline.
                 if len(pending) > MAX_PENDING:
                     pending = b''
 
@@ -328,8 +427,7 @@ class LevelMeter:
                 if levels and any(levels):
                     last_sound = started
 
-                # One write per frame, and the notice is latched: drawing bars
-                # and queueing "NO AUDIO" over them flickers violently.
+                # One write per frame, notice latched: bars plus "NO AUDIO" over them flickers badly.
                 if started - last_sound > SILENCE_TIMEOUT:
                     if not showing_silence:
                         self._menu.message("NO AUDIO".ljust(LCD_COLUMNS))
@@ -349,6 +447,8 @@ class LevelMeter:
                     os.close(fd)
                 except Exception:
                     pass
+            # Before the menu is redrawn: an hour of 60fps is what desyncs the bus. See NOTES.md.
+            self._resync_display()
             if self._on_stop is not None:
                 try:
                     self._on_stop()

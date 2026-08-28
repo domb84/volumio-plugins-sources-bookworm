@@ -14,37 +14,30 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger("Controls")
 from .utils import parse_button_config, spec_contains
 
-# Capture ("learn") mode: while the flag file exists the settings page is asking
-# us to report raw button readings instead of acting on them.
+# While this flag file exists, report raw readings to the settings page instead of acting on them.
 CAPTURE_FLAG_PATH = "/tmp/retrotuner-ui-capture-on"
 CAPTURE_READING_PATH = "/tmp/retrotuner-ui-capture.json"
 CAPTURE_BASELINE_PATH = "/tmp/retrotuner-ui-capture-baseline.json"
 
-# Hardware SPI0 always lives on these BCM pins, and `spi.open(0, ...)` always
-# selects SPI0, so they are fixed regardless of the configured pin numbers.
+# Fixed regardless of configured pins: `spi.open(0, ...)` always selects SPI0.
 SPI0_PINS = "9,10,11"
 
-# The MCP3008's 1.5-cycle sample-and-hold window only settles ~7k of source
-# impedance at 1MHz -- too marginal for this button ladder, causing readings
-# to drift across boundaries. 50kHz settles ~200k at negligible extra cost.
+# 1MHz only settles ~7k of source impedance and drifts across band boundaries; this settles ~200k.
 SPI_CLOCK_HZ = 50000
 
 # Floor on the poll interval, whatever the configured rate says.
 MIN_POLL = 0.05
 
-# Everything below is in raw ADC counts and sized against a measured 69-141
-# count gap between adjacent buttons. index.js hard codes the same defaults for
-# older configs -- keep the two in step. See NOTES.md ("Button reading").
+# Raw ADC counts, sized against the measured 69-141 gap. index.js repeats these
+# defaults for older configs - keep the two in step. See NOTES.md ("Button reading").
 
-# Median of this many reads per poll; a median discards an LCD-strobe glitch
-# where a mean would average it in. Each read costs ~480us at SPI_CLOCK_HZ.
+# Median of this many reads per poll - a mean would average in an LCD-strobe glitch.
 ADC_SAMPLES = 5
 
 # Widens a held button's band so a reading on the edge cannot flicker in and out.
 BUTTON_HYSTERESIS = 6
 
-# While the settings page learns buttons: how far from resting counts as a
-# press, and how far a reading may wander and still be the same one.
+# Learn mode: how far from resting counts as a press, and how far one may wander and still match.
 CAPTURE_PRESS_MARGIN = 10
 CAPTURE_STABLE_TOLERANCE = 3
 
@@ -281,16 +274,13 @@ class Controls:
             now = time.monotonic()
 
             if capture:
-                # Keep the press state neutral so resuming from capture (which
-                # happens without a restart on the idle timeout) can't fire a
-                # press that was only ever meant to be learnt.
+                # Neutral, so resuming from capture can't fire a press only meant to be learnt.
                 self._clear_press(state)
                 state.update(last_key=None, stable_since=None, last_match=None)
                 self._track_capture(state, channel, data, now, button_debounce_rate)
                 continue
 
-            # Falls back to the previous reading's match: anchoring only on a
-            # latched press is too late to ever latch one.
+            # Falls back to the previous match: only anchoring on a latched press never latches one.
             held = state["press_match"] or state["last_match"]
             skipped, action, spec = self._lookup_button(
                 channel, data, parsed_btns, parsed_skips, held, hysteresis,
@@ -342,9 +332,7 @@ class Controls:
                         state["triggered"] = action + "_long"
                 continue
 
-            # Unrecognised value. Warn once per episode rather than once per poll:
-            # a resting value that has drifted off its configured band sits here
-            # indefinitely and would otherwise flood the log.
+            # Once per episode, not per poll: a resting value drifted off its band sits here forever.
             if not state["warned"]:
                 state["warned"] = True
                 suffix = f" (releasing {press[0]})" if ready else ""
@@ -491,8 +479,7 @@ class Controls:
                 results.append(((adc_data[1] & 3) << 8) | adc_data[2])
             return results
 
-        # All-zero usually means the pin mux never took, which reads as a
-        # legitimate value rather than an obvious fault. See NOTES.md.
+        # All-zero usually means the pin mux never took - a legitimate-looking value. See NOTES.md.
         if not any(read_all(channels)):
             logger.warning(
                 "Initial SPI read was raw 0 on every channel; the MCP3008 may not "

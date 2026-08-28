@@ -5,6 +5,7 @@ import logging
 import pytest
 
 import index
+from includes import level_meter
 
 
 # btn_* keys that load_button_config expects to be present (no btn_stop — removed).
@@ -288,3 +289,99 @@ class TestMeterModeSetting:
         from includes.level_meter import MODE_MONO
         assert index.parse_meter_mode({"meter_mode": {"value": "spiral"}}) == MODE_MONO
         assert index.parse_meter_mode({}) == MODE_MONO
+
+class TestVuModeSettings:
+    """The VU mode is the only one that needs cava configured differently rather
+    than merely differently sized, so three numbers have to agree across files
+    that cannot import each other.
+    """
+
+    def _plugin_dir(self):
+        import os
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _index_js(self):
+        import io
+        import os
+        with io.open(os.path.join(self._plugin_dir(), "index.js"),
+                     encoding="utf-8") as handle:
+            return handle.read()
+
+    def _meter_modes_block(self):
+        js = self._index_js()
+        start = js.index("var METER_MODES = {")
+        return js[start:js.index("};", start)]
+
+    def _cava_general(self):
+        import io
+        import os
+        section, sections = None, {}
+        path = os.path.join(self._plugin_dir(), "cava", "retrotuner-cava.conf")
+        with io.open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith(("#", ";")):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1].strip()
+                    sections[section] = {}
+                elif "=" in line and section is not None:
+                    key, _, value = line.partition("=")
+                    sections[section][key.strip()] = value.strip()
+        return sections["general"]
+
+    def test_the_shipped_config_carries_every_key_index_js_rewrites(self):
+        # applyCavaSettings aborts the whole write if a key is missing rather
+        # than adding it, so a key absent here silently freezes cava's settings.
+        general = self._cava_general()
+        for key in ("bars", "framerate", "autosens", "sensitivity"):
+            assert key in general, key
+
+    def test_every_mode_declares_autosens_and_sensitivity(self):
+        # A mode missing either would write "undefined" into cava's config.
+        import re
+        block = self._meter_modes_block()
+        modes = re.findall(r"(\w+):\s*\{([^}]*)\}", block)
+        assert len(modes) == len(level_meter.SUPPORTED_MODES)
+        for name, body in modes:
+            assert "autosens" in body, name
+            assert "sensitivity" in body, name
+
+    def test_vu_is_the_only_mode_with_autosens_off(self):
+        # It is the whole point of the mode: autosens normalises a quiet passage
+        # up to look like a loud one, which is the one thing a meter must not do.
+        import re
+        block = self._meter_modes_block()
+        off = [name for name, body in re.findall(r"(\w+):\s*\{([^}]*)\}", block)
+               if re.search(r"autosens:\s*0\b", body)]
+        assert off == [level_meter.MODE_VU]
+
+    def test_vu_asks_cava_for_one_value_per_sub_column(self):
+        # ascii_max_range has to match the bar's resolution or the meter either
+        # moves in five-pixel jumps (too low) or clips (too high).
+        import re
+        block = self._meter_modes_block()
+        body = re.search(r"vu:\s*\{([^}]*)\}", block).group(1)
+        declared = int(re.search(r"range:\s*(\d+)", body).group(1))
+        assert declared == level_meter.VU_COLUMNS
+
+    def test_vu_reads_the_same_stereo_stream_as_the_row_modes(self):
+        import re
+        body = re.search(r"vu:\s*\{([^}]*)\}", self._meter_modes_block()).group(1)
+        assert int(re.search(r"bars:\s*(\d+)", body).group(1)) == 32
+        assert "channels: 'stereo'" in body
+
+    def test_the_dropdown_offers_it(self):
+        import io
+        import json
+        import os
+        with io.open(os.path.join(self._plugin_dir(), "UIConfig.json"),
+                     encoding="utf-8") as handle:
+            ui = json.load(handle)
+        for section in ui["sections"]:
+            for item in section.get("content", []):
+                if item.get("id") == "meter_mode":
+                    values = [o["value"] for o in item["options"]]
+                    assert level_meter.MODE_VU in values
+                    return
+        raise AssertionError("no meter_mode field in UIConfig.json")

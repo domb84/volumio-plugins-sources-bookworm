@@ -99,12 +99,6 @@ formats because CamillaDSP preserves bit depth.
 `mpd_oled` targets `postalsa` and peppy `peppy_out`; neither exists in this
 Volumio version. Check names in `/etc/asound.conf` before changing the target.
 
-Note the tap converts **format but not rate**, so cava sees whatever the source
-plays at. Its config assumes 44100; a 48kHz stream still analyses, with the
-bands shifted slightly. Fixing it properly would need `type volumiohook` with
-`hw_params_command` (fusion does this for CamillaDSP) plus a cava restart per
-rate change — judged not worth it.
-
 ## cava (`cava/retrotuner-cava.conf`)
 
 Runs as `retrotuner-cava.service` so a plugin restart — which happens on every
@@ -147,11 +141,37 @@ a line break and would cut a frame in half.
 What each mode asks of cava — `index.js` writes these, `level_meter.py` expects
 them, and neither end scales anything:
 
-| Mode | bars | channels | ascii_max_range |
-|---|---|---|---|
-| `mono` | 16 | mono | 16 |
-| `stereo` | 16 | stereo | 16 |
-| `rows_edges` / `rows_centre` | 32 | stereo | 4 |
+| Mode | bars | channels | ascii_max_range | autosens |
+|---|---|---|---|---|
+| `mono` | 16 | mono | 16 | 1 |
+| `stereo` | 16 | stereo | 16 | 1 |
+| `rows_edges` / `rows_centre` | 32 | stereo | 4 | 1 |
+| `vu` | 32 | stereo | 80 | **0** |
+
+**`vu` is not a spectrum, and autosens is the whole reason it needed a mode of
+its own.** cava's autosens continuously renormalises so the bars fill the
+display whatever the input — correct for a visualiser, and the one thing a meter
+must not do, since a quiet passage gets pulled up to look like a loud one. With
+`autosens = 0` and a fixed `sensitivity` the output is proportional to signal
+again. It is still not a calibrated VU: no RMS of the waveform, no 300ms
+standard ballistic. It moves with the music and it is honest about *relative*
+level; it does not measure anything.
+
+The reading per channel is the **mean** of that channel's 16 bands, not the
+loudest — the loudest follows whichever frequency happens to dominate and jumps
+about. `ascii_max_range` is 80 because a horizontal bar is 16 cells of 5 pixel
+columns, so cava's range maps one-to-one onto the bar and it glides instead of
+stepping five pixels at a time. Six glyphs: five bar-end fills and a peak
+marker.
+
+Ballistics are ours, not cava's: fast attack, slow release, and a peak that
+holds `VU_PEAK_HOLD` before sliding back. Raw per-frame means are twitchy and
+read as a spectrum.
+
+**Every key in `applyCavaSettings`' list must already exist in the shipped cava
+config.** `replaceInIniSection` replaces, it never adds, and a miss aborts the
+whole write and leaves cava on its old settings. That is why `autosens` and
+`sensitivity` are in the file even though the spectrum modes leave them alone.
 
 **Channel order is an assumption.** cava sends both channels in one array laid
 out for a mirrored display: first half is the left channel high-to-low so bass
@@ -166,6 +186,67 @@ one alone just buys duplicate or dropped frames.
 decay gradually and that decay counts as sound, so what you see is several
 seconds longer than the constant.
 
+## Screen effects (`includes/effects.py`)
+
+A boot graphic, played once before the first menu render, and a screensaver for
+when nothing is playing. Same shape as the level meter: the effect owns the
+display, renders frames on a thread, and hands it back through an `on_stop`
+hook that redraws the menu.
+
+`frame(t, line1, line2)` is a pure function of time, so a resync can redraw the
+same frame and the tests can assert on what an effect draws at any moment.
+Boot effects declare a `duration` and finish; screensavers return `None` and
+loop. The two registries are separate on purpose -- a looping effect chosen as
+a boot graphic would hold the display before the menu had ever rendered.
+
+**The same 8 CGRAM slots, and they shape every effect.**
+
+| Effect | Glyphs | Why |
+|---|---|---|
+| Split-flap, slide-in, data rain | 0 | ROM characters only |
+| Self test, typewriter | 1 | a solid block |
+| Wipe, scanner | 5 | a cell filled 1–5 columns |
+| VU meters | 6 | the same five, plus a peak marker |
+| Meter tease, travelling wave | 8 | `bar_bitmaps()`, unchanged |
+| Centre-out reveal | 8 + ROM block | four fills anchored to each edge |
+
+* **The wipe covers left-to-right and uncovers right-to-left.** The obvious
+  version — a bar sweeping right with text appearing behind it — cannot work:
+  the boundary cell would need text pixels *and* block pixels in one glyph,
+  which is per-cell art. Reversing the second pass keeps the covered part always
+  on the *left* of a cell, so one family of left-aligned fills does both
+  directions, and 5 glyphs buy an 80-step sweep across 16 cells.
+* **Centre-out needs nine shapes for eight slots.** A curtain parting in both
+  directions wants a left- *and* a right-aligned family, four each, which is the
+  whole budget — so its solid cell is the ROM block (`chr(0xFF)`). It is the one
+  effect that breaks on a module whose ROM lacks that character; `FULL_BLOCK` is
+  the single place to change. Everything else spends a CGRAM slot on its block.
+  It also centres its text: the curtains part from the middle, so text starting
+  hard left would appear from *under* one rather than behind it.
+* **The slide-in leaves again.** It arrives, holds, then carries on the way each
+  row came, so the menu renders onto a clear panel rather than cutting over the
+  text. It is the one boot effect whose last frame is not the name.
+
+The VU screensaver's movement is **synthesised**, not audio. Nothing is playing
+when a screensaver is up, so there is no signal to follow; the cava-driven meter
+is a *mode of the level meter* (`meter_mode = vu`), not a screensaver.
+
+**Screensavers run at 10-15 fps deliberately.** Sustained 60fps is the workload
+that desynced the bus (see "Display driver") and nothing idle needs more. VFDs
+also burn in, so the idle set moves and the clock wanders a column each minute.
+
+Only bouncing text uses `screensaver_line1`; the rest are graphics. There is no
+`screensaver_line2` — the marquee was its only user, and a settings field that
+nothing reads is worse than no field.
+
+Both hooks are in `menu_manager.py`: boot runs inline in `run()` in place of the
+"Initialising..." message, and the screensaver hangs off
+`_reset_screensaver_timer()`, armed at startup, by any control input, and by
+playback stopping. It only takes the display when nothing is playing — the meter
+is already the idle screen while something is. Both countdowns are armed in
+`run()` rather than only on a button press, or a restart nobody touches never
+reaches either. Empty text falls back to the hostname, i.e. the device name.
+
 ## Display driver (`rpi-lcd-menu` fork)
 
 A frame is 34 controller instructions: cursor home, 16 characters, a set-address
@@ -178,14 +259,91 @@ Two changes took a frame from ~14ms to ~2.7ms (ceiling roughly 370fps):
    `write4bits` waits only 50µs before the next byte, so the gap was 30× too
    short. It only worked because the padding delays in `pulseEnable` happened to
    stretch it.
-2. **No delays in `pulseEnable`.** `sleep()` has a floor of tens of
+2. **No `sleep()` in `pulseEnable`.** `sleep()` has a floor of tens of
    microseconds however small a value you pass, so three nominal 1µs delays cost
-   ~180µs per nibble and dominated every write. A single `RPi.GPIO` output call
-   already takes 1–2µs, comfortably over the 450ns the enable pulse needs.
+   ~180µs per nibble and dominated every write.
 
-(2) is only safe while the GPIO calls are slow. Driving E from pigpio waves or C
-would need real timing back. (1) must land before (2), since (2) removes the
-padding that was hiding it.
+(1) must land before (2), since (2) removes the padding that was hiding it.
+
+### The bus desync (fixed in 2.4.0)
+
+There is no RW pin on this wiring, so the busy flag can never be read and every
+delay in the driver is a fixed guess. Undershoot one and the controller misses a
+nibble; from then on every byte is assembled from the low nibble of one write and
+the high nibble of the next. `0xC0` — "move to line 2" — is never seen intact, so
+all 32 characters land on line 1: **line 2 dead and frozen, line 1 flickering**
+because it is written twice a frame. Not gradual — clean until the first bad
+nibble, broken from then on, and only a plugin restart cleared it, because
+`initDisplay()` ran once in `__init__` and never again.
+
+What undershot was (2). Its first cut removed the delays and put nothing back, on
+the reasoning that a single `RPi.GPIO` call takes 1–2µs anyway and so covers the
+450ns the enable pulse needs. That is Python overhead, not a guarantee: 0.4–2µs
+depending on clock, cache and contention, and *shortest* under sustained
+rendering, when the governor is pinned at 1.4GHz — narrowest exactly when the
+display is busiest. Removing `LCD_RETURNHOME` in (1) is what made it permanent
+rather than self-correcting: home also resets the display shift register every
+frame, and that was the only recovery behaviour there was.
+
+Two changes in 2.4.0:
+
+* **`pulseEnable` holds E for a real 1µs**, busy-waiting on `perf_counter()`
+  rather than sleeping — ~150µs a frame, against the ~2ms the `command_delay_us`
+  sleeps already cost.
+* **`resync_display()`** re-runs the handshake, reloads CGRAM and redraws.
+  `lcd_render` calls it every `RESYNC_FRAME_INTERVAL` frames (600, ~10s at
+  60fps), turning "broken until restart" into "one bad frame". The meter and the
+  screen effects also call it on the way in and out.
+
+**Confirmed fixed by an overnight run at 60fps with no corruption** (28 Aug 2026)
+— hours of sustained rendering is the only thing that ever reproduced it.
+
+Neither is the *correct* fix, which is to wire RW and poll the busy flag,
+removing every fixed delay; that is a hardware change. Worth checking first, and
+not determinable from the code: whether the module is a 5V part fed 3.3V logic,
+where V_IH is ~3.5V and every edge is marginal — that would explain the thermal
+sensitivity better than clock scaling alone.
+
+### Brightness
+
+The panel dims, which is not obvious from the wiring. Function Set is
+`0 0 1 DL N F * *` and the bottom two bits are don't-cares on a genuine
+HD44780; this VFD reuses them as an attenuator. Four levels, no finer control:
+100, 75, 50 and 25 percent. 25 is the dimmest step, **not** off — display on/off
+is a different register and the two do not disturb each other.
+
+The bits live in the driver's `displayfunction`, so `resync_display()` restores
+them along with everything else. Held anywhere else, brightness would reset to
+full every ~10s at 60fps.
+
+Brightness is hardware state, so the panel comes up at full on every process
+start. The plugin therefore records the level in
+`/data/configuration/user_interface/retrotuner-ui/state.json` and reapplies it
+in `run()` **before the boot graphic**, or a settings save would silently undim
+the display. That file is written only by the python side; it sits beside
+`config.json` rather than in it so v-conf never fights it.
+
+`BRIGHTNESS_LEVELS` in `menu_manager.py` is the cycle the dimmer steps through,
+brightest first, wrapping at the bottom. **The dimmer is the one control that
+does not reclaim the display**: every other press dismisses the meter or the
+screensaver, but changing brightness has no reason to. Its *long* press does,
+being the meter toggle.
+
+That exemption is why `_on_screensaver_idle()` checks whether a screensaver is
+already running. The dimmer still re-arms the idle countdown, so without the
+check a press during a screensaver would start a second `EffectPlayer` beside
+the first -- two threads rendering to one display.
+
+### One writer at a time
+
+Every display write goes through `RpiLCDMenu`, which serialises on a lock its
+own worker thread holds while rendering. **Never call `menu.lcd.*` directly** —
+that reaches past the lock and puts a second writer on the data pins, which
+desyncs the bus just as reliably as a short pulse does. `menu.toggle_display()`,
+not `menu.lcd.displayToggle()`; `menu.clearDisplay()`, which locks internally,
+not `menu.lcd.write4bits(...)`. This matters most for anything on a
+`threading.Timer` (`_schedule_deferred`) or on the meter thread, since those run
+alongside the worker by definition.
 
 `command_delay_us = 50` in `write4bits` is what gives the controller its 37µs to
 settle. Removing that one *will* drop characters.
@@ -308,6 +466,51 @@ for our own restarts.
 **SPI** needs `dtparam=spi=on` in `/boot/userconfig.txt` and a reboot — only a
 boot re-probes the pin mux. Until then every MCP3008 read returns 0.
 
+## Install
+
+**Nothing that needs compiling goes in the venv.** `RPi.GPIO` and `spidev` are
+the only requirements that would, so they come prebuilt from apt
+(`python3-rpi.gpio`, `python3-spidev`) and the venv is created with
+`--system-site-packages` so it can see them. That keeps `python3-dev` out
+entirely, which matters: `python3-dev` and `python3-venv` are pinned with `=` to
+the exact python3.11 build on this image, so asking for either drags apt into
+upgrading python3.11/libc6/locales to match — which previously triggered a mass
+service restart (needrestart, or the libc6 postinst prompt) that broke playback
+and crash-looped upmpdcli. The apt packages depend on python3 by an ordinary
+range instead, so they pull none of that in.
+
+For the same reason the venv is built by `virtualenv` fetched as a standalone
+zipapp, not by the stdlib `venv` module — that would need `python3-venv`, same
+pin. virtualenv bundles its own pip, so it does not need `ensurepip` either.
+
+**The venv lives outside the plugin directory** (`/data/retrotuner-ui/venv`). It
+is created as root, and a root-owned subfolder inside the plugin dir stops
+Volumio (running as `volumio`) removing the old folder on update, so the
+update's `mv` fails with "Directory not empty".
+
+**cava is an install dependency, not an optional extra** — it holds the tap fifo
+open permanently, and an unread fifo stops playback within a second. See the
+audio tap section above.
+
+**Updating the `rpi-lcd-menu` fork needs `--force-reinstall`.** pip sees an
+installed version and skips otherwise, and pushing to a branch does not move the
+version number, so it cannot tell a new commit from the installed one:
+
+```
+pip install --force-reinstall --no-deps git+https://github.com/domb84/rpi-lcd-menu.git
+```
+
+Three requirements the fork has to meet, none of which pip can check, and only
+the first of which fails loudly:
+
+* `create_char()` and `render_frame()`, or the level meter dies at runtime with
+  `AttributeError`.
+* The render-performance work (#6) — a frame takes ~2.7ms instead of ~14ms. The
+  meter defaults to 60fps and offers 120, which the older timing cannot serve:
+  it would sit at 84% of wall time mid-render and starve the SPI polling.
+* 2.4.0 or newer, for the enable-pulse hold and `resync_display()` — see the
+  display driver section. Both degrade quietly on an older copy.
+
 ## Testing
 
 `pytest` from the plugin directory. Everything is pure logic — no test touches a
@@ -315,5 +518,7 @@ display, a fifo or a socket.
 
 Several tests exist to pin things that cannot import each other and would
 otherwise drift silently: the cava config against `level_meter.py`'s constants,
-`UIConfig.json`'s options against `SUPPORTED_MODES` and `SUPPORTED_FRAME_RATES`,
-and the cava config's section layout against what `index.js` rewrites.
+`UIConfig.json`'s options against `SUPPORTED_MODES`, `SUPPORTED_FRAME_RATES` and
+the effect registries, the effect ids across `effects.py` / `config.json` /
+`UIConfig.json` / `index.js`, and the cava config's section layout against what
+`index.js` rewrites.

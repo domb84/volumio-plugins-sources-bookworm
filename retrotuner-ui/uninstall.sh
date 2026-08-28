@@ -28,10 +28,8 @@ rm -f /tmp/retrotuner-audio.fifo /tmp/retrotuner-bars
 rm -f /lib/systemd/system/retrotuner-ui.service /lib/systemd/system/retrotuner-cava.service
 systemctl daemon-reload -q
 
-# Note: the pigpiod.service tweak made by install.sh lives in a file owned by
-# the pigpio package, so removing the package above cleans it up. The
-# /etc/udev/rules.d/99-com.rules gpiomem fix is intentionally left in place -
-# it corrects a Volumio-wide permission bug that other GPIO plugins rely on.
+# The pigpiod.service tweak goes with the pigpio package. The 99-com.rules gpiomem
+# fix is left in place deliberately: other GPIO plugins rely on it too.
 
 echo "Done"
 echo "pluginuninstallend"

@@ -476,6 +476,169 @@
             {
               "value": "rows_centre",
               "label": "Stereo rows - grow out from the centre"
+            },
+            {
+              "value": "vu",
+              "label": "VU meters - one level bar per channel, with peak hold"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "screen_effects",
+      "element": "section",
+      "label": "Screen Effects",
+      "icon": "fa-magic",
+      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Of the screensavers only bouncing text uses it - the rest draw a graphic and ignore it.",
+      "onSave": {
+        "type": "controller",
+        "endpoint": "user_interface/retrotuner-ui",
+        "method": "saveOptions"
+      },
+      "saveButton": {
+        "label": "Save",
+        "data": [
+          "boot_effect",
+          "boot_line1",
+          "boot_line2",
+          "screensaver_effect",
+          "screensaver_line1",
+          "screensaver_timeout"
+        ]
+      },
+      "content": [
+        {
+          "id": "boot_effect",
+          "element": "select",
+          "label": "Boot graphic",
+          "value": {
+            "value": "splitflap",
+            "label": "Split-flap - characters roll and settle"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": "None - straight to the menu"
+            },
+            {
+              "value": "splitflap",
+              "label": "Split-flap - characters roll and settle"
+            },
+            {
+              "value": "post",
+              "label": "Power-on self test - all segments, then dissolve"
+            },
+            {
+              "value": "wipe",
+              "label": "Wipe - a curtain sweeps across and back"
+            },
+            {
+              "value": "typewriter",
+              "label": "Typewriter - characters land one at a time"
+            },
+            {
+              "value": "slide",
+              "label": "Slide-in - the rows arrive, hold, then leave again"
+            },
+            {
+              "value": "tease",
+              "label": "Meter tease - bars rise, collapse, reveal the text"
+            },
+            {
+              "value": "centre",
+              "label": "Centre-out reveal - curtains part from the middle"
+            }
+          ]
+        },
+        {
+          "id": "boot_line1",
+          "type": "text",
+          "element": "input",
+          "label": "Boot text, line 1",
+          "value": ""
+        },
+        {
+          "id": "boot_line2",
+          "type": "text",
+          "element": "input",
+          "label": "Boot text, line 2",
+          "value": ""
+        },
+        {
+          "id": "screensaver_effect",
+          "element": "select",
+          "label": "Screensaver",
+          "value": {
+            "value": "wave",
+            "label": "Travelling wave - a sine scrolls across"
+          },
+          "options": [
+            {
+              "value": "none",
+              "label": "None - leave the menu on screen"
+            },
+            {
+              "value": "wave",
+              "label": "Travelling wave - a sine scrolls across"
+            },
+            {
+              "value": "bounce",
+              "label": "Bouncing text - drifts around the panel"
+            },
+            {
+              "value": "vu",
+              "label": "VU meters - two bars with peak hold"
+            },
+            {
+              "value": "scanner",
+              "label": "Scanner - a block sweeps back and forth"
+            },
+            {
+              "value": "rain",
+              "label": "Data rain - characters cascade across"
+            }
+          ]
+        },
+        {
+          "id": "screensaver_line1",
+          "type": "text",
+          "element": "input",
+          "label": "Screensaver text",
+          "value": ""
+        },
+        {
+          "id": "screensaver_timeout",
+          "element": "select",
+          "label": "Start the screensaver after",
+          "value": {
+            "value": 120,
+            "label": "2 minutes"
+          },
+          "options": [
+            {
+              "value": 30,
+              "label": "30 seconds"
+            },
+            {
+              "value": 60,
+              "label": "1 minute"
+            },
+            {
+              "value": 120,
+              "label": "2 minutes"
+            },
+            {
+              "value": 300,
+              "label": "5 minutes"
+            },
+            {
+              "value": 600,
+              "label": "10 minutes"
+            },
+            {
+              "value": 1800,
+              "label": "30 minutes"
             }
           ]
         }

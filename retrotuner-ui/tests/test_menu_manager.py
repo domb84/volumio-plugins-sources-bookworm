@@ -1,4 +1,5 @@
 """Tests for includes/menu_manager.py: the restart-marker gate and menu building."""
+import inspect
 import json
 import os
 import queue
@@ -208,6 +209,7 @@ def _display_manager():
     m._pending_render_timer = None
     m._schedule_deferred = Mock()
     m._level_meter = None      # hidden beta feature; off unless started
+    m._screensaver = None      # idle screen; off unless the timeout has fired
     return m
 
 
@@ -304,3 +306,293 @@ class TestPlayingUpdatesDismissTheIdleMeter:
         # _meter_auto is False, so the queue loop never calls _stop_auto_meter.
         m._level_meter.stop.assert_not_called()
         assert m._level_meter.running is True
+
+
+class TestDisplayWritesGoThroughTheLock:
+    """The library serialises display writes on a lock its worker thread holds.
+    Anything reaching past it to menu.lcd puts a second writer on the 4-bit data
+    pins, which desyncs the bus -- see NOTES.md ("Display driver")."""
+
+    def test_dimmer_toggles_through_the_menu_not_the_driver(self):
+        m = _bare_manager()
+
+        m.dimmer()
+
+        m.menu.toggle_display.assert_called_once_with()
+        m.menu.lcd.displayToggle.assert_not_called()
+
+    def test_no_source_file_reaches_past_the_lock_to_the_driver(self):
+        # Cheap guard against the next one: every write has a locked equivalent
+        # on the menu, so there is no legitimate reason to touch .lcd here.
+        import pathlib
+        root = pathlib.Path(mm.__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(root.glob('includes/*.py')) + [root / 'index.py']:
+            for number, line in enumerate(path.read_text(encoding='utf8').splitlines(), 1):
+                code = line.split('#')[0]
+                if '.lcd.' in code:
+                    offenders.append('%s:%d' % (path.name, number))
+        assert not offenders, "writes past the display lock: %s" % offenders
+
+
+class TestIdleCountdownsAreArmedAtStartup:
+    """A plugin restart nobody touches must still reach the meter and the
+    screensaver. Both countdowns were armed only inside the control-action
+    branch, so an untouched restart sat on the menu forever."""
+
+    def test_run_arms_the_countdown_before_the_queue_loop(self):
+        # run() claims the display and then loops, so it cannot be called here.
+        # Merely finding the call is not enough: the control-action branch is
+        # inside run() too, and that one is reached only once a button has been
+        # pressed. What has to hold is that one happens before the loop starts.
+        source = inspect.getsource(mm.MenuManager.run)
+        armed = source.index("self._reset_idle_timer()")
+        loop = source.index("while not (self.stop_event")
+        assert armed < loop
+
+    def _manager(self, timeout=30.0, effect='wave'):
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._idle_timer = None
+        m._screensaver_timer = None
+        m._screensaver_timeout = timeout
+        m._screensaver_effect = effect
+        return m
+
+    def test_arming_the_idle_timer_also_arms_the_screensaver(self):
+        m = self._manager()
+        m._reset_idle_timer()
+        try:
+            assert m._idle_timer is not None
+            assert m._screensaver_timer is not None
+        finally:
+            m._idle_timer.cancel()
+            m._screensaver_timer.cancel()
+
+    def test_a_screensaver_set_to_none_arms_nothing(self):
+        m = self._manager(effect='none')
+        m._reset_screensaver_timer()
+        assert m._screensaver_timer is None
+
+    def test_a_zero_timeout_arms_nothing(self):
+        m = self._manager(timeout=0)
+        m._reset_screensaver_timer()
+        assert m._screensaver_timer is None
+
+    def test_re_arming_replaces_the_pending_timer(self):
+        # Otherwise every press leaves another timer running and the screensaver
+        # fires on the oldest one, however recently a button was pressed.
+        m = self._manager()
+        m._reset_screensaver_timer()
+        first = m._screensaver_timer
+        m._reset_screensaver_timer()
+        try:
+            assert m._screensaver_timer is not first
+            assert not first.is_alive() or first.finished.is_set()
+        finally:
+            m._screensaver_timer.cancel()
+
+
+class TestIdleFallsBackToTheScreensaver:
+    """The resting display when nothing is playing. The meter covers the playing
+    case, and by this point it has already claimed the display."""
+
+    def _manager(self, playing, meter_running=False, screensaver_running=False):
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._screensaver_timer = Mock()
+        m._playing = playing
+        m._level_meter = Mock()
+        m._level_meter.running = meter_running
+        m._screensaver = Mock()
+        m._screensaver.running = screensaver_running
+        m._start_screensaver = Mock(return_value=True)
+        return m
+
+    def test_it_starts_when_nothing_is_playing(self):
+        m = self._manager(playing=False)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_called_once_with()
+
+    def test_it_stays_away_while_something_plays(self):
+        m = self._manager(playing=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()
+
+    def test_it_does_not_take_the_display_from_the_meter(self):
+        m = self._manager(playing=False, meter_running=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()
+
+    def test_it_does_not_start_a_second_one_over_itself(self):
+        # The dimmer re-arms the countdown without dismissing anything, so this
+        # can fire while a screensaver is already drawing. Two players would
+        # both render, on the same display, through the same lock.
+        m = self._manager(playing=False, screensaver_running=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()
+
+
+def _dimmer_manager(tmp_path, monkeypatch, stored=None):
+    """A manager with just enough state for the dimmer, and its own state file."""
+    state = tmp_path / "state.json"
+    if stored is not None:
+        state.write_text(stored)
+    monkeypatch.setattr(mm, "_STATE_PATH", str(state))
+    m = mm.MenuManager.__new__(mm.MenuManager)
+    m._brightness = mm.BRIGHTNESS_LEVELS[0]
+    m._display = Mock()
+    return m, state
+
+
+class TestBrightnessCycle:
+    """One press steps down a level and wraps at the bottom. 25% is the dimmest
+    step the hardware has, not off, so the cycle never blanks the panel."""
+
+    def test_it_steps_down_through_every_level_and_wraps(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        seen = []
+        for _ in range(len(mm.BRIGHTNESS_LEVELS)):
+            m._cycle_brightness()
+            seen.append(m._brightness)
+        assert seen == list(mm.BRIGHTNESS_LEVELS[1:]) + [mm.BRIGHTNESS_LEVELS[0]]
+
+    def test_the_levels_are_ordered_brightest_first(self):
+        assert list(mm.BRIGHTNESS_LEVELS) == sorted(mm.BRIGHTNESS_LEVELS, reverse=True)
+
+    def test_it_never_turns_the_display_off(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        for _ in range(12):
+            m._cycle_brightness()
+            assert m._brightness in mm.BRIGHTNESS_LEVELS
+        m._display.off.assert_not_called()
+        m._display.toggle.assert_not_called()
+
+    def test_each_step_reaches_the_panel(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        m._display.brightness.assert_called_once_with(mm.BRIGHTNESS_LEVELS[1])
+
+    def test_a_display_that_cannot_dim_does_not_take_the_menu_down(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._display.brightness.side_effect = OSError("no socket")
+        m._cycle_brightness()                      # no exception
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_a_hand_edited_level_falls_back_to_full(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._brightness = 42
+        m._cycle_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+
+class TestBrightnessPersistence:
+    """The panel comes up at full every start -- brightness is hardware state the
+    library reinitialises -- so a settings save would silently undim it."""
+
+    def test_a_press_is_written_out(self, tmp_path, monkeypatch):
+        m, state = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        assert json.loads(state.read_text())["brightness"] == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_it_is_restored_and_pushed_to_the_panel(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{"brightness": 50}')
+        m._restore_brightness()
+        assert m._brightness == 50
+        m._display.brightness.assert_called_once_with(50)
+
+    def test_a_box_that_has_never_dimmed_stays_at_full(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+        m._display.brightness.assert_not_called()
+
+    def test_a_corrupt_state_file_is_ignored(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{not json')
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+
+    def test_a_level_the_hardware_lacks_is_ignored(self, tmp_path, monkeypatch):
+        # 60% would raise ValueError in the library; refuse it here instead.
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{"brightness": 60}')
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+        m._display.brightness.assert_not_called()
+
+    def test_an_unwritable_state_file_does_not_take_the_menu_down(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        monkeypatch.setattr(mm, "_STATE_PATH", str(tmp_path / "missing" / "state.json"))
+        m._cycle_brightness()                      # no exception
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_a_round_trip_survives_a_restart(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        m._cycle_brightness()                      # now at 50%
+        fresh, _ = _dimmer_manager(tmp_path, monkeypatch)
+        fresh._restore_brightness()
+        assert fresh._brightness == m._brightness
+
+
+class TestDimmerIsWiredToTheCycle:
+    def test_the_button_cycles_rather_than_toggling(self):
+        # run() builds control_actions, so it cannot be called here; what is
+        # pinned is that the dimmer no longer reaches for display.toggle().
+        source = inspect.getsource(mm.MenuManager.run)
+        assert "'btn_dimmer': self._cycle_brightness" in source
+        assert "self._display.toggle()" not in source
+
+    def test_the_boot_graphic_runs_at_the_restored_level(self):
+        # Restore has to happen before anything is drawn, or the boot graphic
+        # flashes at full brightness on every restart.
+        source = inspect.getsource(mm.MenuManager.run)
+        assert source.index("_restore_brightness") < source.index("_play_boot_effect")
+
+
+class TestDimmerDoesNotDismissWhatIsOnScreen:
+    """Pressing the dimmer changes brightness. It is the one control that has no
+    reason to reclaim the display, so it must not dismiss the meter or the
+    screensaver the way every other press does."""
+
+    def _dispatch(self, action, meter_running, screensaver_running):
+        """Replay the control branch of run()'s loop for one action."""
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._level_meter = Mock()
+        m._level_meter.running = meter_running
+        m._screensaver = Mock()
+        m._screensaver.running = screensaver_running
+        m._meter_auto = True
+        m._stop_screensaver = Mock()
+
+        # Mirrors run(): the dimmer is exempt, its long press only from the meter.
+        if action != 'btn_dimmer':
+            m._stop_screensaver()
+        if action not in ('btn_dimmer', 'btn_dimmer_long') and m._meter_active():
+            m._level_meter.stop()
+            m._meter_auto = False
+        return m
+
+    def test_the_dimmer_leaves_the_meter_running(self):
+        m = self._dispatch('btn_dimmer', meter_running=True, screensaver_running=False)
+        m._level_meter.stop.assert_not_called()
+        assert m._meter_auto is True
+
+    def test_the_dimmer_leaves_the_screensaver_running(self):
+        m = self._dispatch('btn_dimmer', meter_running=False, screensaver_running=True)
+        m._stop_screensaver.assert_not_called()
+
+    def test_any_other_press_still_reclaims_the_display(self):
+        m = self._dispatch('btn_enter', meter_running=True, screensaver_running=True)
+        m._level_meter.stop.assert_called_once()
+        m._stop_screensaver.assert_called_once()
+
+    def test_the_long_press_takes_the_display_from_the_screensaver(self):
+        # It is the meter toggle, so it does want the display -- but it must not
+        # stop the meter itself, or the toggle could never turn it off.
+        m = self._dispatch('btn_dimmer_long', meter_running=True, screensaver_running=True)
+        m._stop_screensaver.assert_called_once()
+        m._level_meter.stop.assert_not_called()
+
+    def test_the_dispatch_here_matches_run(self):
+        # The branch above is a copy, so pin it against the real thing.
+        source = inspect.getsource(mm.MenuManager.run)
+        assert "if action != 'btn_dimmer':" in source
+        assert "if action not in ('btn_dimmer', 'btn_dimmer_long') and self._meter_active():" in source
