@@ -16,9 +16,7 @@ logger = logging.getLogger("Menu Manager")
 _SCROLL_IDLE_SECONDS = 3.0
 _MENU_IDLE_SECONDS = 30.0
 
-# Every level the panel has, brightest first: the dimmer steps down and wraps.
-# Two don't-care bits in Function Set, so there is no finer control -- see
-# NOTES.md ("Display driver"). The library rejects anything else.
+# Brightest first; the dimmer steps down and wraps. See NOTES.md ("Brightness").
 BRIGHTNESS_LEVELS = (100, 75, 50, 25)
 
 # Runtime state, not a setting: written by us, never by v-conf, so it sits
@@ -46,7 +44,7 @@ class MenuManager:
                  boot_effect: str = effects.DEFAULT_BOOT_EFFECT,
                  boot_line1: str = '', boot_line2: str = '',
                  screensaver_effect: str = effects.DEFAULT_SCREENSAVER_EFFECT,
-                 screensaver_line1: str = '', screensaver_line2: str = '',
+                 screensaver_line1: str = '',
                  screensaver_timeout: float = effects.DEFAULT_SCREENSAVER_TIMEOUT):
         self.controlQ = controlQ
         self.volumioQ = volumioQ
@@ -87,7 +85,7 @@ class MenuManager:
         self._boot_lines = (boot_line1, boot_line2)
         # Idle screen for when nothing is playing; the meter covers the playing case.
         self._screensaver_effect = screensaver_effect
-        self._screensaver_lines = (screensaver_line1, screensaver_line2)
+        self._screensaver_text = screensaver_line1
         self._screensaver_timeout = screensaver_timeout
         self._screensaver = None
         self._screensaver_timer: Optional[threading.Timer] = None
@@ -168,9 +166,12 @@ class MenuManager:
                 if 'control' in queueItem:
                     action = queueItem['control']
                     if action in self.control_actions:
-                        # Both own the display while they run, so a press has to reclaim it.
-                        self._stop_screensaver()
-                        if action != 'btn_dimmer_long' and self._meter_active():
+                        # A press reclaims the display -- except the dimmer, which only
+                        # changes brightness. Its long press is the meter toggle, so that
+                        # one does claim it. See NOTES.md ("Brightness").
+                        if action != 'btn_dimmer':
+                            self._stop_screensaver()
+                        if action not in ('btn_dimmer', 'btn_dimmer_long') and self._meter_active():
                             self._level_meter.stop()
                             self._meter_auto = False
                         self.menuAccessTime = datetime.now()
@@ -306,11 +307,8 @@ class MenuManager:
             logger.info("Level meter on")
 
     def _cycle_brightness(self) -> None:
-        """Step one level down the dimmer, wrapping back to full at the bottom.
-
-        25% is the dimmest step the hardware has, not off, so the cycle never
-        blanks the panel.
-        """
+        """Step one level down, wrapping to full. 25% is the dimmest step the
+        hardware has, not off, so this never blanks the panel."""
         try:
             index = BRIGHTNESS_LEVELS.index(self._brightness)
         except ValueError:                 # a hand-edited state file
@@ -332,12 +330,8 @@ class MenuManager:
                          self._brightness, e)
 
     def _restore_brightness(self) -> None:
-        """Reapply the level the dimmer was left on before the process restarted.
-
-        The panel comes up at full every time -- brightness is hardware state
-        the library reinitialises -- so without this a settings save would
-        silently undim the display.
-        """
+        """Reapply the level the dimmer was left on. The panel comes up at full
+        every start, so without this a settings save silently undims it."""
         try:
             with open(_STATE_PATH, "r", encoding="utf-8") as handle:
                 stored = json.load(handle).get("brightness")
@@ -389,10 +383,9 @@ class MenuManager:
         effect = effects.screensaver_effect(self._screensaver_effect)
         if effect is None:
             return False
-        line1 = self._screensaver_lines[0] or effects.default_text()
         # on_stop redraws the menu, the same hook the meter uses to hand the display back.
         self._screensaver = effects.EffectPlayer(
-            self.menu, effect, line1=line1, line2=self._screensaver_lines[1],
+            self.menu, effect, line1=self._screensaver_text or effects.default_text(),
             display=self._display, on_stop=self._render_menu)
         return self._screensaver.start()
 
@@ -545,8 +538,9 @@ class MenuManager:
         """Take the display for the screensaver. Not re-armed: the next press
         dismisses it and restarts the countdown."""
         self._screensaver_timer = None
-        # The meter is the idle screen while something plays, and it has already claimed the display.
-        if self._playing or self._meter_active():
+        # Already running counts: the dimmer re-arms the countdown without
+        # dismissing anything, so this can otherwise fire over itself.
+        if self._playing or self._meter_active() or self._screensaver_active():
             return
         self._start_screensaver()
 

@@ -10,7 +10,7 @@ import socket
 import threading
 import time
 
-from .level_meter import bar_bitmaps, render_columns
+from .level_meter import MAX_LEVEL, bar_bitmaps, render_columns
 
 logger = logging.getLogger("Effects")
 
@@ -63,6 +63,33 @@ def _ease_out(t):
 
 def _block_glyph():
     return [0b11111] * CELL_ROWS
+
+
+def _left_fill_bitmaps(widths=range(1, 6)):
+    """Cells filled from the left edge. Five of them give a bar 80 steps of
+    travel across 16 cells instead of 16."""
+    glyphs = []
+    for width in widths:
+        bits = 0
+        for column in range(width):
+            bits |= 0b10000 >> column
+        glyphs.append([bits] * CELL_ROWS)
+    return glyphs
+
+
+def _right_fill_bitmaps(widths=range(1, 6)):
+    """The mirror image, for anything that grows towards the left edge."""
+    glyphs = []
+    for width in widths:
+        bits = 0
+        for column in range(width):
+            bits |= 0b00001 << column
+        glyphs.append([bits] * CELL_ROWS)
+    return glyphs
+
+
+def _ease_in(t):
+    return t ** 3
 
 
 class Effect:
@@ -146,13 +173,7 @@ class Wipe(Effect):
     _CLEAR = 1.1
 
     def glyphs(self):
-        out = []
-        for width in range(1, 6):
-            bits = 0
-            for column in range(width):
-                bits |= 0b10000 >> column
-            out.append([bits] * CELL_ROWS)
-        return out
+        return _left_fill_bitmaps()
 
     @staticmethod
     def _cell(covered, ch):
@@ -221,7 +242,12 @@ class SlideIn(Effect):
     id = 'slide'
     label = 'Slide-in'
     fps = 30
-    duration = 2.4
+    # In, hold, then out the way it came -- so the menu arrives on a clear panel.
+    _IN = 0.9
+    _HOLD = 0.9
+    _OUT = 0.8
+    _STAGGER = 0.18                    # row 2 trails row 1, or it reads as one block
+    duration = _IN + _HOLD + _OUT
 
     @staticmethod
     def _shift(text, offset):
@@ -234,16 +260,25 @@ class SlideIn(Effect):
         return ''.join(row)
 
     def frame(self, t, line1, line2):
-        a = _ease_out(max(0.0, min(1.0, t / 0.9)))
-        b = _ease_out(max(0.0, min(1.0, (t - 0.18) / 0.9)))
         s1 = str(line1 or '')[:LCD_COLUMNS]
         s2 = str(line2 or '')[:LCD_COLUMNS]
         home1 = max(0, (LCD_COLUMNS - len(s1)) // 2)
         home2 = max(0, (LCD_COLUMNS - len(s2)) // 2)
-        return _compose(
-            self._shift(s1, int(round(home1 + (1 - a) * LCD_COLUMNS))),
-            self._shift(s2, int(round(home2 - (1 - b) * LCD_COLUMNS))),
-        )
+
+        leaving = t - (self._IN + self._HOLD)
+        if leaving <= 0:
+            a = _ease_out(max(0.0, min(1.0, t / self._IN)))
+            b = _ease_out(max(0.0, min(1.0, (t - self._STAGGER) / self._IN)))
+            drift1 = (1 - a) * LCD_COLUMNS
+            drift2 = -(1 - b) * LCD_COLUMNS
+        else:
+            # Out the way each row came in, rather than reversing into itself.
+            k = _ease_in(max(0.0, min(1.0, leaving / self._OUT)))
+            drift1 = -k * LCD_COLUMNS
+            drift2 = k * LCD_COLUMNS
+
+        return _compose(self._shift(s1, int(round(home1 + drift1))),
+                        self._shift(s2, int(round(home2 + drift2))))
 
 
 class MeterTease(Effect):
@@ -271,7 +306,73 @@ class MeterTease(Effect):
         return _compose(_centre(line1), _centre(line2))
 
 
+class CentreOut(Effect):
+    id = 'centre'
+    label = 'Centre-out reveal'
+    fps = 30
+    _COVER = 1.2
+    _CLEAR = 1.2
+    duration = _COVER + _CLEAR + 0.6
+
+    # Four fills anchored to each edge of the cell; the solid one is the ROM
+    # block, or a curtain that parts in both directions would want nine glyphs.
+    RIGHT_FILL_GLYPHS = tuple(range(0, 4))
+    LEFT_FILL_GLYPHS = tuple(range(4, 8))
+
+    def glyphs(self):
+        return _right_fill_bitmaps(range(1, 5)) + _left_fill_bitmaps(range(1, 5))
+
+    def _cell(self, width, left_half, ch):
+        if width <= 0:
+            return ch
+        if width >= 5:
+            return FULL_BLOCK
+        glyphs = self.RIGHT_FILL_GLYPHS if left_half else self.LEFT_FILL_GLYPHS
+        return chr(glyphs[width - 1])
+
+    def frame(self, t, line1, line2):
+        # Centred, because the curtains part from the middle: text starting hard
+        # left would appear from under the curtain rather than behind it.
+        lines = (_centre(line1), _centre(line2))
+        half = LCD_COLUMNS * 5 / 2.0
+
+        if t < self._COVER:
+            edge = _ease_out(t / self._COVER) * half
+            revealed = False
+        elif t < self._COVER + self._CLEAR:
+            edge = half - _ease_out((t - self._COVER) / self._CLEAR) * half
+            revealed = True
+        else:
+            return _compose(*lines)
+
+        middle = LCD_COLUMNS // 2
+        rows = []
+        for text in lines:
+            out = []
+            for c in range(LCD_COLUMNS):
+                left_half = c < middle
+                distance = (middle - 1 - c) if left_half else (c - middle)
+                width = int(round(edge - distance * 5))
+                out.append(self._cell(width, left_half,
+                                      text[c] if revealed else ' '))
+            rows.append(''.join(out))
+        return _compose(*rows)
+
+
 # ---- Screensavers --------------------------------------------------------
+
+def _wave_shape(column, t):
+    """The full-height wave: about 1.4 cycles across the panel, moving quickly.
+    Sixteen steps of height absorb that much detail."""
+    value = (0.53125
+             + 0.4375 * math.sin(column * 0.55 - t / 0.38)
+             + 0.075 * math.sin(column * 1.3 + t / 0.7))
+    return max(0.0, min(1.0, value))
+
+
+def _levels(shape, t, steps):
+    return [int(round(shape(c, t) * steps)) for c in range(LCD_COLUMNS)]
+
 
 class Wave(Effect):
     id = 'wave'
@@ -283,13 +384,8 @@ class Wave(Effect):
         return bar_bitmaps()
 
     def frame(self, t, line1, line2):
-        levels = []
-        for c in range(LCD_COLUMNS):
-            value = (8.5
-                     + 7 * math.sin(c * 0.55 - t / 0.38)
-                     + 1.2 * math.sin(c * 1.3 + t / 0.7))
-            levels.append(int(round(max(0, min(16, value)))))
-        return render_columns(levels)
+        # One wave stacked over both rows: 16 steps of one pixel each.
+        return render_columns(_levels(_wave_shape, t, MAX_LEVEL))
 
 
 class Bounce(Effect):
@@ -312,95 +408,111 @@ class Bounce(Effect):
         return _compose(row, '') if y == 0 else _compose('', row)
 
 
-class Marquee(Effect):
-    id = 'marquee'
-    label = 'Marquee'
+class VuMeters(Effect):
+    id = 'vu'
+    label = 'VU meters'
     fps = 15
-
-    _STEP = 0.14
-    _SEPARATOR = '   -   '
-
-    def frame(self, t, line1, line2):
-        source = (str(line1 or '').strip() or default_text()) + self._SEPARATOR
-        offset = int(t / self._STEP) % len(source)
-        window = (source + source)[offset:offset + LCD_COLUMNS]
-        return _compose(window, _centre(line2))
-
-
-class BigClock(Effect):
-    id = 'clock'
-    label = 'Big clock'
-    fps = 1
     uses_text = False
 
-    # Corner and bar pieces; the ROM block does the thick strokes, which is what fits 8 slots.
-    _LT = [0x07, 0x0F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F]
-    _UB = [0x1F, 0x1F, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00]
-    _RT = [0x1C, 0x1E, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F]
-    _LL = [0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x0F, 0x07]
-    _LB = [0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x1F, 0x1F]
-    _LR = [0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1E, 0x1C]
-    _UM = [0x1F, 0x1F, 0x1F, 0x00, 0x00, 0x00, 0x1F, 0x1F]
-    _LM = [0x1F, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x1F, 0x1F]
-
-    # Glyph slots, then FULL for the ROM block and None for a blank cell.
-    LT, UB, RT, LL, LB, LR, UM, LM = range(8)
-    FULL = 8
-
-    _DIGITS = {
-        '0': ((LT, UB, RT), (LL, LB, LR)),
-        '1': ((UB, FULL, None), (LB, FULL, LB)),
-        '2': ((UM, UM, RT), (LL, LM, LM)),
-        '3': ((UM, UM, RT), (LM, LM, LR)),
-        '4': ((LL, LB, FULL), (None, None, FULL)),
-        '5': ((FULL, UM, UM), (LM, LM, LR)),
-        '6': ((LT, UM, UM), (LL, LM, LR)),
-        '7': ((UB, UB, RT), (None, LT, None)),
-        '8': ((LT, UM, RT), (LL, LM, LR)),
-        '9': ((LT, UM, RT), (LB, LB, LR)),
-    }
+    _PEAK_GLYPH = 5
+    _PEAK_WINDOW = 1.4          # seconds the marker looks back over
+    _PEAK_SAMPLES = 14
 
     def glyphs(self):
-        return [self._LT, self._UB, self._RT, self._LL,
-                self._LB, self._LR, self._UM, self._LM]
+        return _left_fill_bitmaps() + [[0b00100] * CELL_ROWS]
 
     @staticmethod
-    def _cell(slot):
-        if slot is None:
-            return ' '
-        if slot == BigClock.FULL:
-            return FULL_BLOCK
-        return chr(slot)
-
-    def _now(self):
-        return time.localtime()
+    def _level(channel, t):
+        """Synthesised movement. Nothing is playing when this is on screen, so
+        there is no signal to follow -- the cava-driven meter is a mode of the
+        level meter, not a screensaver."""
+        value = (0.52
+                 + 0.30 * math.sin(t / 0.43 + channel * 2.3)
+                 + 0.14 * math.sin(t / 0.17 + channel * 5.1)
+                 + 0.08 * math.sin(t / 0.07 + channel * 1.7))
+        return max(0.0, min(1.0, value))
 
     def frame(self, t, line1, line2):
-        now = self._now()
-        digits = '%02d%02d' % (now.tm_hour, now.tm_min)
-        rows = [[' '] * LCD_COLUMNS, [' '] * LCD_COLUMNS]
-        # 13 of the 16 columns, so wander the spare ones and the phosphor wears evenly.
-        col = 1 + now.tm_min % 3
-        for index, ch in enumerate(digits):
-            shape = self._DIGITS.get(ch)
-            if shape is not None:
-                for r in range(LCD_ROWS):
-                    for i in range(3):
-                        if col + i < LCD_COLUMNS:
-                            rows[r][col + i] = self._cell(shape[r][i])
-            col += 3
-            if index == 1:                       # colon between hours and minutes
-                if col < LCD_COLUMNS:
-                    rows[0][col] = ':'
-                    rows[1][col] = ':'
-                col += 1
-        return _compose(''.join(rows[0]), ''.join(rows[1]))
+        span = LCD_COLUMNS * 5
+        step = self._PEAK_WINDOW / self._PEAK_SAMPLES
+        rows = []
+        for channel in range(LCD_ROWS):
+            end = self._level(channel, t) * span
+            # Held over a window rather than carried between frames, so the
+            # animation stays a pure function of time.
+            peak = max(self._level(channel, t - i * step)
+                       for i in range(self._PEAK_SAMPLES)) * span
+            peak_cell = min(LCD_COLUMNS - 1, int(peak) // 5)
+            out = []
+            for c in range(LCD_COLUMNS):
+                width = max(0, min(5, int(round(end - c * 5))))
+                if width > 0:
+                    out.append(chr(width - 1))
+                elif c == peak_cell:
+                    out.append(chr(self._PEAK_GLYPH))
+                else:
+                    out.append(' ')
+            rows.append(''.join(out))
+        return _compose(*rows)
+
+
+class Scanner(Effect):
+    id = 'scanner'
+    label = 'Scanner'
+    fps = 15
+    uses_text = False
+
+    _SWEEP = 1.4                # seconds per pass
+
+    def glyphs(self):
+        return _left_fill_bitmaps()
+
+    def frame(self, t, line1, line2):
+        u = (t / self._SWEEP) % 2
+        swing = _ease_out(u) if u < 1 else 1 - _ease_out(u - 1)
+        head = swing * (LCD_COLUMNS * 5 - 1)
+        out = []
+        for c in range(LCD_COLUMNS):
+            # Narrower the further behind the head, which is the whole trail.
+            width = int(round(5 - abs(c * 5 + 2 - head) / 3))
+            out.append(chr(min(5, width) - 1) if width > 0 else ' ')
+        row = ''.join(out)
+        return _compose(row, row)
+
+
+class DataRain(Effect):
+    id = 'rain'
+    label = 'Data rain'
+    fps = 10
+    uses_text = False
+
+    _BAND = 7                   # cells still lit behind the head
+    _SPEED = 0.085              # seconds per column
+    _CHURN = 0.11               # seconds between character changes
+
+    def frame(self, t, line1, line2):
+        head = (t / self._SPEED) % (LCD_COLUMNS + 10)
+        tick = int(t / self._CHURN)
+        rows = []
+        for r in range(LCD_ROWS):
+            out = []
+            for c in range(LCD_COLUMNS):
+                age = head - c
+                # Thinning towards the tail is what makes it read as motion.
+                if (age < 0 or age > self._BAND
+                        or _noise(c * 3.7 + r * 11.3 + tick * 2.1) < 0.25 + age * 0.09):
+                    out.append(' ')
+                    continue
+                out.append(_ROLL[int(_noise(c * 5.1 + r * 17.9 + tick) * len(_ROLL))])
+            rows.append(''.join(out))
+        return _compose(*rows)
 
 
 # ---- Registry ------------------------------------------------------------
 
-BOOT_EFFECTS = (SplitFlap, PowerOnTest, Wipe, Typewriter, SlideIn, MeterTease)
-SCREENSAVER_EFFECTS = (Wave, Bounce, Marquee, BigClock)
+BOOT_EFFECTS = (SplitFlap, PowerOnTest, Wipe, Typewriter, SlideIn, MeterTease,
+                CentreOut)
+SCREENSAVER_EFFECTS = (Wave, Bounce, VuMeters, Scanner, DataRain)
 
 SUPPORTED_BOOT_EFFECTS = (NONE,) + tuple(e.id for e in BOOT_EFFECTS)
 SUPPORTED_SCREENSAVER_EFFECTS = (NONE,) + tuple(e.id for e in SCREENSAVER_EFFECTS)

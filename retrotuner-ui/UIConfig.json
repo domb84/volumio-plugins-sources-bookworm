@@ -490,7 +490,7 @@
       "element": "section",
       "label": "Screen Effects",
       "icon": "fa-magic",
-      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Some effects draw a graphic and ignore the text entirely - the travelling wave and the big clock.",
+      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Of the screensavers only bouncing text uses it - the rest draw a graphic and ignore it.",
       "onSave": {
         "type": "controller",
         "endpoint": "user_interface/retrotuner-ui",
@@ -504,7 +504,6 @@
           "boot_line2",
           "screensaver_effect",
           "screensaver_line1",
-          "screensaver_line2",
           "screensaver_timeout"
         ]
       },
@@ -540,11 +539,15 @@
             },
             {
               "value": "slide",
-              "label": "Slide-in - the rows arrive from opposite sides"
+              "label": "Slide-in - the rows arrive, hold, then leave again"
             },
             {
               "value": "tease",
               "label": "Meter tease - bars rise, collapse, reveal the text"
+            },
+            {
+              "value": "centre",
+              "label": "Centre-out reveal - curtains part from the middle"
             }
           ]
         },
@@ -584,12 +587,16 @@
               "label": "Bouncing text - drifts around the panel"
             },
             {
-              "value": "marquee",
-              "label": "Marquee - line 1 scrolls, line 2 stays put"
+              "value": "vu",
+              "label": "VU meters - two bars with peak hold"
             },
             {
-              "value": "clock",
-              "label": "Big clock - two-row digits"
+              "value": "scanner",
+              "label": "Scanner - a block sweeps back and forth"
+            },
+            {
+              "value": "rain",
+              "label": "Data rain - characters cascade across"
             }
           ]
         },
@@ -597,14 +604,7 @@
           "id": "screensaver_line1",
           "type": "text",
           "element": "input",
-          "label": "Screensaver text, line 1",
-          "value": ""
-        },
-        {
-          "id": "screensaver_line2",
-          "type": "text",
-          "element": "input",
-          "label": "Screensaver text, line 2",
+          "label": "Screensaver text",
           "value": ""
         },
         {

@@ -14,5 +14,5 @@ uvicorn
 # Retry helper used by the Volumio client
 tenacity
 
-# LCD menu library (forked). Pinned to the dimming branch; --force-reinstall to update.
-git+https://github.com/domb84/rpi-lcd-menu.git@add-dimming-capability
+# LCD menu library (forked). Needs the brightness support in #8; --force-reinstall to update.
+git+https://github.com/domb84/rpi-lcd-menu.git

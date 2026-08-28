@@ -133,15 +133,17 @@ var BOOT_EFFECT_LABELS = {
     post:       'Power-on self test - all segments, then dissolve',
     wipe:       'Wipe - a curtain sweeps across and back',
     typewriter: 'Typewriter - characters land one at a time',
-    slide:      'Slide-in - the rows arrive from opposite sides',
-    tease:      'Meter tease - bars rise, collapse, reveal the text'
+    slide:      'Slide-in - the rows arrive, hold, then leave again',
+    tease:      'Meter tease - bars rise, collapse, reveal the text',
+    centre:     'Centre-out reveal - curtains part from the middle'
 };
 var SCREENSAVER_EFFECT_LABELS = {
     none:    'None - leave the menu on screen',
     wave:    'Travelling wave - a sine scrolls across',
     bounce:  'Bouncing text - drifts around the panel',
-    marquee: 'Marquee - line 1 scrolls, line 2 stays put',
-    clock:   'Big clock - two-row digits'
+    vu:      'VU meters - two bars with peak hold',
+    scanner: 'Scanner - a block sweeps back and forth',
+    rain:    'Data rain - characters cascade across'
 };
 var SCREENSAVER_TIMEOUT_LABELS = {
     30: '30 seconds', 60: '1 minute', 120: '2 minutes',
@@ -156,7 +158,7 @@ var STRING_SETTINGS = {
 };
 
 // Free text rather than a fixed set, so isValid cannot check them against anything.
-var TEXT_SETTINGS = ['boot_line1', 'boot_line2', 'screensaver_line1', 'screensaver_line2'];
+var TEXT_SETTINGS = ['boot_line1', 'boot_line2', 'screensaver_line1'];
 
 retrotunerui.prototype.meterModeLabel = function (mode) {
     return METER_MODE_LABELS[mode] || METER_MODE_LABELS.mono;
@@ -383,7 +385,6 @@ retrotunerui.prototype.getUIConfig = function() {
                      { value: saverEffect,
                        label: self.effectLabel(SCREENSAVER_EFFECT_LABELS, saverEffect, 'wave') });
             setValue(screen, 'screensaver_line1', self.config.get('screensaver_line1', ''));
-            setValue(screen, 'screensaver_line2', self.config.get('screensaver_line2', ''));
             const saverTimeout = parseInt(self.config.get('screensaver_timeout', 120), 10) || 120;
             setValue(screen, 'screensaver_timeout',
                      { value: saverTimeout,

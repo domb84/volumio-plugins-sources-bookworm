@@ -396,12 +396,14 @@ class TestIdleFallsBackToTheScreensaver:
     """The resting display when nothing is playing. The meter covers the playing
     case, and by this point it has already claimed the display."""
 
-    def _manager(self, playing, meter_running=False):
+    def _manager(self, playing, meter_running=False, screensaver_running=False):
         m = mm.MenuManager.__new__(mm.MenuManager)
         m._screensaver_timer = Mock()
         m._playing = playing
         m._level_meter = Mock()
         m._level_meter.running = meter_running
+        m._screensaver = Mock()
+        m._screensaver.running = screensaver_running
         m._start_screensaver = Mock(return_value=True)
         return m
 
@@ -417,6 +419,14 @@ class TestIdleFallsBackToTheScreensaver:
 
     def test_it_does_not_take_the_display_from_the_meter(self):
         m = self._manager(playing=False, meter_running=True)
+        m._on_screensaver_idle()
+        m._start_screensaver.assert_not_called()
+
+    def test_it_does_not_start_a_second_one_over_itself(self):
+        # The dimmer re-arms the countdown without dismissing anything, so this
+        # can fire while a screensaver is already drawing. Two players would
+        # both render, on the same display, through the same lock.
+        m = self._manager(playing=False, screensaver_running=True)
         m._on_screensaver_idle()
         m._start_screensaver.assert_not_called()
 
@@ -535,3 +545,54 @@ class TestDimmerIsWiredToTheCycle:
         # flashes at full brightness on every restart.
         source = inspect.getsource(mm.MenuManager.run)
         assert source.index("_restore_brightness") < source.index("_play_boot_effect")
+
+
+class TestDimmerDoesNotDismissWhatIsOnScreen:
+    """Pressing the dimmer changes brightness. It is the one control that has no
+    reason to reclaim the display, so it must not dismiss the meter or the
+    screensaver the way every other press does."""
+
+    def _dispatch(self, action, meter_running, screensaver_running):
+        """Replay the control branch of run()'s loop for one action."""
+        m = mm.MenuManager.__new__(mm.MenuManager)
+        m._level_meter = Mock()
+        m._level_meter.running = meter_running
+        m._screensaver = Mock()
+        m._screensaver.running = screensaver_running
+        m._meter_auto = True
+        m._stop_screensaver = Mock()
+
+        # Mirrors run(): the dimmer is exempt, its long press only from the meter.
+        if action != 'btn_dimmer':
+            m._stop_screensaver()
+        if action not in ('btn_dimmer', 'btn_dimmer_long') and m._meter_active():
+            m._level_meter.stop()
+            m._meter_auto = False
+        return m
+
+    def test_the_dimmer_leaves_the_meter_running(self):
+        m = self._dispatch('btn_dimmer', meter_running=True, screensaver_running=False)
+        m._level_meter.stop.assert_not_called()
+        assert m._meter_auto is True
+
+    def test_the_dimmer_leaves_the_screensaver_running(self):
+        m = self._dispatch('btn_dimmer', meter_running=False, screensaver_running=True)
+        m._stop_screensaver.assert_not_called()
+
+    def test_any_other_press_still_reclaims_the_display(self):
+        m = self._dispatch('btn_enter', meter_running=True, screensaver_running=True)
+        m._level_meter.stop.assert_called_once()
+        m._stop_screensaver.assert_called_once()
+
+    def test_the_long_press_takes_the_display_from_the_screensaver(self):
+        # It is the meter toggle, so it does want the display -- but it must not
+        # stop the meter itself, or the toggle could never turn it off.
+        m = self._dispatch('btn_dimmer_long', meter_running=True, screensaver_running=True)
+        m._stop_screensaver.assert_called_once()
+        m._level_meter.stop.assert_not_called()
+
+    def test_the_dispatch_here_matches_run(self):
+        # The branch above is a copy, so pin it against the real thing.
+        source = inspect.getsource(mm.MenuManager.run)
+        assert "if action != 'btn_dimmer':" in source
+        assert "if action not in ('btn_dimmer', 'btn_dimmer_long') and self._meter_active():" in source

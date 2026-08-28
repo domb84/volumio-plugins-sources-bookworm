@@ -26,6 +26,11 @@ def _frames(effect, line1="RETROTUNER", line2="T-H300DAB"):
     return [effect.frame(t, line1, line2) for t in SAMPLE_TIMES]
 
 
+def centre_glyph_families_differ():
+    glyphs = effects.CentreOut().glyphs()
+    return glyphs[:4] != glyphs[4:]
+
+
 class TestEveryEffectRendersALegalFrame:
     @pytest.mark.parametrize("cls", ALL_EFFECTS, ids=lambda c: c.id)
     def test_frame_is_two_rows_of_sixteen(self, cls):
@@ -58,11 +63,9 @@ class TestEveryEffectRendersALegalFrame:
 
     @pytest.mark.parametrize("cls", ALL_EFFECTS, ids=lambda c: c.id)
     def test_frames_are_deterministic(self, cls):
-        # The animation is a pure function of time, so a resync can redraw the
+        # Every effect is a pure function of time, so a resync can redraw the
         # same frame and a test can rely on what it sees.
         effect = cls()
-        if isinstance(effect, effects.BigClock):
-            pytest.skip("reads the wall clock")
         assert _frames(effect) == _frames(effect)
 
 
@@ -79,15 +82,18 @@ class TestGlyphBudget:
             assert len(glyph) == effects.CELL_ROWS
             assert all(0 <= row <= 0b11111 for row in glyph)
 
-    def test_the_clock_spends_every_slot_and_leans_on_the_rom_block(self):
-        # 8 corner pieces plus a solid block is 9 shapes; the block has to be
-        # the free ROM one, or the digits do not fit in CGRAM at all.
-        clock = effects.BigClock()
-        assert len(clock.glyphs()) == 8
-        # Fixed at 14:15: the block appears only in 1, 4 and 5, so against the
-        # wall clock this would pass or fail depending on the time of day.
-        clock._now = lambda: time.struct_time((2026, 8, 28, 14, 15, 0, 4, 240, 0))
-        assert effects.FULL_BLOCK in clock.frame(0, '', '')
+    def test_centre_out_spends_every_slot_and_leans_on_the_rom_block(self):
+        # A curtain parting in both directions needs a left- and a right-aligned
+        # family, four each. That is the whole budget, so the solid cell has to
+        # be the free ROM block or the effect would want nine shapes.
+        centre = effects.CentreOut()
+        assert len(centre.glyphs()) == 8
+        mid = centre._COVER * 0.9
+        assert effects.FULL_BLOCK in centre.frame(mid, 'HELLO', 'WORLD')
+
+    def test_centre_out_uses_both_fill_directions(self):
+        # One family only would make the two curtains asymmetric.
+        assert centre_glyph_families_differ()
 
     def test_the_wipe_reuses_one_glyph_family_for_both_passes(self):
         # Five left-aligned fills; a right-aligned set as well would be 10.
@@ -100,11 +106,19 @@ class TestBootEffectsFinish:
         assert cls.duration is not None and cls.duration > 0
 
     @pytest.mark.parametrize("cls", effects.BOOT_EFFECTS, ids=lambda c: c.id)
-    def test_the_final_frame_is_the_text(self, cls):
-        # Whatever the animation does on the way, it has to land on the text.
-        frame = cls().frame(cls.duration, "HELLO", "WORLD")
-        assert "HELLO" in frame
-        assert "WORLD" in frame
+    def test_the_text_is_shown_in_full_at_some_point(self, cls):
+        # Not necessarily at the end: the slide-in leaves again, so the menu
+        # arrives on a clear panel. What matters is that the name was readable.
+        effect = cls()
+        steps = 200
+        assert any("HELLO" in frame and "WORLD" in frame
+                   for frame in (effect.frame(cls.duration * i / steps,
+                                              "HELLO", "WORLD")
+                                 for i in range(steps + 1)))
+
+    def test_the_slide_leaves_the_panel_clear(self):
+        assert effects.SlideIn().frame(effects.SlideIn.duration,
+                                       "HELLO", "WORLD").strip(" \n") == ""
 
     @pytest.mark.parametrize("cls", effects.SCREENSAVER_EFFECTS, ids=lambda c: c.id)
     def test_screensavers_loop_forever(self, cls):
@@ -124,11 +138,25 @@ class TestTextHandling:
         for frame in _frames(cls(), "", ""):
             assert len(frame.split('\n')) == effects.LCD_ROWS
 
-    def test_marquee_scrolls_the_text_past(self):
-        marquee = effects.Marquee()
-        first = marquee.frame(0, "ABCDEFGHIJKLMNOPQRST", "")
-        later = marquee.frame(marquee._STEP * 3, "ABCDEFGHIJKLMNOPQRST", "")
-        assert first != later
+    def test_the_scanner_sweeps_rather_than_sitting_still(self):
+        scanner = effects.Scanner()
+        seen = {scanner.frame(t * 0.1, "", "") for t in range(28)}
+        assert len(seen) > 8
+
+    def test_the_scanner_lights_both_rows_alike(self):
+        top, bottom = effects.Scanner().frame(0.4, "", "").split("\n")
+        assert top == bottom
+
+    def test_data_rain_keeps_moving(self):
+        rain = effects.DataRain()
+        seen = {rain.frame(t * 0.1, "", "") for t in range(30)}
+        assert len(seen) > 8
+
+    def test_the_vu_bars_move_independently(self):
+        # Two channels driven off the same curve at the same phase would just
+        # be one bar drawn twice.
+        top, bottom = effects.VuMeters().frame(3.0, "", "").split("\n")
+        assert top != bottom
 
     def test_bounce_moves_the_text_around(self):
         bounce = effects.Bounce()
@@ -290,8 +318,7 @@ class TestConfigWiring:
 
     @pytest.mark.parametrize("field_id", [
         "boot_effect", "boot_line1", "boot_line2",
-        "screensaver_effect", "screensaver_line1", "screensaver_line2",
-        "screensaver_timeout",
+        "screensaver_effect", "screensaver_line1", "screensaver_timeout",
     ])
     def test_the_field_is_saved_by_its_section(self, field_id):
         # A field missing from saveButton.data is rendered but never submitted.
@@ -312,7 +339,7 @@ class TestConfigWiring:
 
     @pytest.mark.parametrize("key", [
         "boot_effect", "boot_line1", "boot_line2", "screensaver_effect",
-        "screensaver_line1", "screensaver_line2", "screensaver_timeout",
+        "screensaver_line1", "screensaver_timeout",
     ])
     def test_config_json_carries_every_key(self, key):
         assert key in self._load("config.json")
@@ -325,10 +352,20 @@ class TestConfigWiring:
         _section, field = self._field(field_id)
         assert field["value"]["value"] == default
 
-    @pytest.mark.parametrize("cls", ALL_EFFECTS, ids=lambda c: c.id)
-    def test_index_js_labels_every_effect(self, cls):
-        # index.js relabels a select on load; an id it does not know renders blank.
-        assert "%s:" % cls.id in self._index_js()
+    def _label_block(self, name):
+        js = self._index_js()
+        start = js.index("var %s = {" % name)
+        return js[start:js.index("};", start)]
+
+    @pytest.mark.parametrize("cls", effects.BOOT_EFFECTS, ids=lambda c: c.id)
+    def test_index_js_labels_every_boot_effect(self, cls):
+        # Scoped to the right map: "vu:" also appears in METER_MODE_LABELS, so a
+        # search over the whole file passes without the screensaver label existing.
+        assert "%s:" % cls.id in self._label_block("BOOT_EFFECT_LABELS")
+
+    @pytest.mark.parametrize("cls", effects.SCREENSAVER_EFFECTS, ids=lambda c: c.id)
+    def test_index_js_labels_every_screensaver(self, cls):
+        assert "%s:" % cls.id in self._label_block("SCREENSAVER_EFFECT_LABELS")
 
     def test_index_js_flattens_the_new_selects_before_validating(self):
         # A select posts {value, label}; unflattened it fails the numeric check
@@ -339,8 +376,11 @@ class TestConfigWiring:
 
     def test_index_js_accepts_the_free_text_fields(self):
         js = self._index_js()
-        for key in ("boot_line1", "boot_line2", "screensaver_line1", "screensaver_line2"):
-            assert key in js.split("var TEXT_SETTINGS")[1][:300]
+        block = js.split("var TEXT_SETTINGS")[1][:300]
+        for key in ("boot_line1", "boot_line2", "screensaver_line1"):
+            assert key in block
+        # Its only user was the marquee; a field nothing reads is worse than none.
+        assert "screensaver_line2" not in js
 
 
 class TestIndexPyParsing:

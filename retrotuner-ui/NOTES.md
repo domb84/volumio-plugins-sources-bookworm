@@ -203,11 +203,12 @@ a boot graphic would hold the display before the menu had ever rendered.
 
 | Effect | Glyphs | Why |
 |---|---|---|
-| Split-flap, slide-in | 0 | ROM characters only |
+| Split-flap, slide-in, data rain | 0 | ROM characters only |
 | Self test, typewriter | 1 | a solid block |
-| Sub-character wipe | 5 | a cell filled 1–5 columns |
+| Wipe, scanner | 5 | a cell filled 1–5 columns |
+| VU meters | 6 | the same five, plus a peak marker |
 | Meter tease, travelling wave | 8 | `bar_bitmaps()`, unchanged |
-| Big clock | 8 + ROM block | corner and bar pieces |
+| Centre-out reveal | 8 + ROM block | four fills anchored to each edge |
 
 * **The wipe covers left-to-right and uncovers right-to-left.** The obvious
   version — a bar sweeping right with text appearing behind it — cannot work:
@@ -215,14 +216,28 @@ a boot graphic would hold the display before the menu had ever rendered.
   which is per-cell art. Reversing the second pass keeps the covered part always
   on the *left* of a cell, so one family of left-aligned fills does both
   directions, and 5 glyphs buy an 80-step sweep across 16 cells.
-* **The clock needs nine shapes for eight slots**, so its solid block comes from
-  ROM (`chr(0xFF)`), as every HD44780 big-digit library does. It is the only
-  effect that breaks on a module whose ROM lacks it; `FULL_BLOCK` is the one
-  place to change. Everything else spends a CGRAM slot on its block instead.
+* **Centre-out needs nine shapes for eight slots.** A curtain parting in both
+  directions wants a left- *and* a right-aligned family, four each, which is the
+  whole budget — so its solid cell is the ROM block (`chr(0xFF)`). It is the one
+  effect that breaks on a module whose ROM lacks that character; `FULL_BLOCK` is
+  the single place to change. Everything else spends a CGRAM slot on its block.
+  It also centres its text: the curtains part from the middle, so text starting
+  hard left would appear from *under* one rather than behind it.
+* **The slide-in leaves again.** It arrives, holds, then carries on the way each
+  row came, so the menu renders onto a clear panel rather than cutting over the
+  text. It is the one boot effect whose last frame is not the name.
 
-**Screensavers run at 4-15 fps deliberately.** Sustained 60fps is the workload
+The VU screensaver's movement is **synthesised**, not audio. Nothing is playing
+when a screensaver is up, so there is no signal to follow; the cava-driven meter
+is a *mode of the level meter* (`meter_mode = vu`), not a screensaver.
+
+**Screensavers run at 10-15 fps deliberately.** Sustained 60fps is the workload
 that desynced the bus (see "Display driver") and nothing idle needs more. VFDs
 also burn in, so the idle set moves and the clock wanders a column each minute.
+
+Only bouncing text uses `screensaver_line1`; the rest are graphics. There is no
+`screensaver_line2` — the marquee was its only user, and a settings field that
+nothing reads is worse than no field.
 
 Both hooks are in `menu_manager.py`: boot runs inline in `run()` in place of the
 "Initialising..." message, and the screensaver hangs off
@@ -307,6 +322,17 @@ start. The plugin therefore records the level in
 in `run()` **before the boot graphic**, or a settings save would silently undim
 the display. That file is written only by the python side; it sits beside
 `config.json` rather than in it so v-conf never fights it.
+
+`BRIGHTNESS_LEVELS` in `menu_manager.py` is the cycle the dimmer steps through,
+brightest first, wrapping at the bottom. **The dimmer is the one control that
+does not reclaim the display**: every other press dismisses the meter or the
+screensaver, but changing brightness has no reason to. Its *long* press does,
+being the meter toggle.
+
+That exemption is why `_on_screensaver_idle()` checks whether a screensaver is
+already running. The dimmer still re-arms the idle countdown, so without the
+check a press during a screensaver would start a second `EffectPlayer` beside
+the first -- two threads rendering to one display.
 
 ### One writer at a time
 

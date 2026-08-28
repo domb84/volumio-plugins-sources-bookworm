@@ -208,7 +208,6 @@ def build_threads(config_data: Dict[str, Any]) -> Tuple[threading.Thread, thread
         boot_line2=parse_optional_text_field(config_data, "boot_line2"),
         screensaver_effect=screensaver_effect,
         screensaver_line1=parse_optional_text_field(config_data, "screensaver_line1"),
-        screensaver_line2=parse_optional_text_field(config_data, "screensaver_line2"),
         screensaver_timeout=screensaver_timeout,
     )
     volumio_worker = volumio.Volumio(volumio_queue, menu_manager_queue, stop_event)

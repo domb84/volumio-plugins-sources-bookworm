@@ -163,10 +163,6 @@
         "type": "text",
         "value": ""
     },
-    "screensaver_line2": {
-        "type": "text",
-        "value": ""
-    },
     "screensaver_timeout": {
         "type": "number",
         "value": "120"
