@@ -105,10 +105,13 @@ function replaceInIniSection(contents, sectionName, key, value) {
 
 // What each mode needs from cava; neither end scales anything. See the table in NOTES.md.
 var METER_MODES = {
-    mono:        { bars: 16, channels: 'mono',   range: 16 },
-    stereo:      { bars: 16, channels: 'stereo', range: 16 },
-    rows_edges:  { bars: 32, channels: 'stereo', range: 4 },
-    rows_centre: { bars: 32, channels: 'stereo', range: 4 }
+    mono:        { bars: 16, channels: 'mono',   range: 16, autosens: 1, sensitivity: 100 },
+    stereo:      { bars: 16, channels: 'stereo', range: 16, autosens: 1, sensitivity: 100 },
+    rows_edges:  { bars: 32, channels: 'stereo', range: 4,  autosens: 1, sensitivity: 100 },
+    rows_centre: { bars: 32, channels: 'stereo', range: 4,  autosens: 1, sensitivity: 100 },
+    // The only mode with autosens off: it normalises a quiet passage up to look
+    // like a loud one, which is the one thing a meter must not do.
+    vu:          { bars: 32, channels: 'stereo', range: 80, autosens: 0, sensitivity: 100 }
 };
 
 // Next to METER_MODES so they cannot drift. A select renders blank until getUIConfig labels it.
@@ -116,7 +119,8 @@ var METER_MODE_LABELS = {
     mono:        'Mono - 16 bands, full height',
     stereo:      'Stereo mirrored - 8 bands per channel',
     rows_edges:  'Stereo rows - grow in from the edges',
-    rows_centre: 'Stereo rows - grow out from the centre'
+    rows_centre: 'Stereo rows - grow out from the centre',
+    vu:          'VU meters - one level bar per channel, with peak hold'
 };
 
 // The display is 16 columns; boot and screensaver text is trimmed to it on save.
@@ -137,7 +141,6 @@ var SCREENSAVER_EFFECT_LABELS = {
     wave:    'Travelling wave - a sine scrolls across',
     bounce:  'Bouncing text - drifts around the panel',
     marquee: 'Marquee - line 1 scrolls, line 2 stays put',
-    breathe: 'Breathing - the panel fades up and down',
     clock:   'Big clock - two-row digits'
 };
 var SCREENSAVER_TIMEOUT_LABELS = {
@@ -173,6 +176,8 @@ retrotunerui.prototype.applyCavaSettings = function () {
     const wanted = [
         ['general', 'framerate', rate],
         ['general', 'bars', mode.bars],
+        ['general', 'autosens', mode.autosens],
+        ['general', 'sensitivity', mode.sensitivity],
         ['output', 'channels', mode.channels],
         ['output', 'ascii_max_range', mode.range]
     ];

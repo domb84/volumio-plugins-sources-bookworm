@@ -16,6 +16,15 @@ logger = logging.getLogger("Menu Manager")
 _SCROLL_IDLE_SECONDS = 3.0
 _MENU_IDLE_SECONDS = 30.0
 
+# Every level the panel has, brightest first: the dimmer steps down and wraps.
+# Two don't-care bits in Function Set, so there is no finer control -- see
+# NOTES.md ("Display driver"). The library rejects anything else.
+BRIGHTNESS_LEVELS = (100, 75, 50, 25)
+
+# Runtime state, not a setting: written by us, never by v-conf, so it sits
+# beside config.json rather than in it. Survives restarts and plugin updates.
+_STATE_PATH = "/data/configuration/user_interface/retrotuner-ui/state.json"
+
 # Written by index.js before a self-triggered restart, to tell one apart from a real shutdown.
 _RESTART_MARKER_PATH = "/tmp/retrotuner-ui-restarting"
 
@@ -83,6 +92,10 @@ class MenuManager:
         self._screensaver = None
         self._screensaver_timer: Optional[threading.Timer] = None
 
+        # Panel brightness. Restored in run(), so the boot graphic already
+        # comes up at whatever the dimmer was left on.
+        self._brightness = BRIGHTNESS_LEVELS[0]
+
         # Pushed by the Volumio worker; picks the idle screen. Pause and stop both count as not playing.
         self._playing = False
         # True only for an idle-triggered meter; one the user asked for outlives the music.
@@ -100,6 +113,7 @@ class MenuManager:
         self.menu = RpiLCDMenu(lcdRS, lcdE, [lcdD4, lcdD5, lcdD6, lcdD7], scrolling_menu=False)
         self._display = DisplayController()
         self._display.on()
+        self._restore_brightness()
         if not self._play_boot_effect():
             self.menu.message(('Initialising...').upper(), autoscroll=True)
 
@@ -129,7 +143,7 @@ class MenuManager:
             'btn_favourite_long': self.remove_favorite,
             'btn_sleep_timer': lambda: self.volumioQ.put({'button': 'system://sleep'}),
             'btn_sleep_timer_long': self._cancel_sleep_timer,
-            'btn_dimmer': lambda: self._display.toggle(),
+            'btn_dimmer': self._cycle_brightness,
             # Hidden beta: long-press the dimmer for the audio level meter.
             'btn_dimmer_long': self._toggle_level_meter,
             'btn_back': lambda: self.menuManagerQ.put({'menu': self.go_back(), 'remember':False})
@@ -290,6 +304,65 @@ class MenuManager:
             # Asked for explicitly, so stopping playback won't dismiss it the way it dismisses an idle one.
             self._meter_auto = False
             logger.info("Level meter on")
+
+    def _cycle_brightness(self) -> None:
+        """Step one level down the dimmer, wrapping back to full at the bottom.
+
+        25% is the dimmest step the hardware has, not off, so the cycle never
+        blanks the panel.
+        """
+        try:
+            index = BRIGHTNESS_LEVELS.index(self._brightness)
+        except ValueError:                 # a hand-edited state file
+            index = 0
+        self._brightness = BRIGHTNESS_LEVELS[(index + 1) % len(BRIGHTNESS_LEVELS)]
+        self._apply_brightness()
+        self._save_brightness()
+        logger.info("Brightness %d%%", self._brightness)
+
+    def _apply_brightness(self) -> None:
+        """Push the current level to the panel. Never fatal: a display that
+        cannot dim is worse dimmed than not running."""
+        if self._display is None:
+            return
+        try:
+            self._display.brightness(self._brightness)
+        except Exception as e:
+            logger.error("Could not set brightness to %s%%: %s",
+                         self._brightness, e)
+
+    def _restore_brightness(self) -> None:
+        """Reapply the level the dimmer was left on before the process restarted.
+
+        The panel comes up at full every time -- brightness is hardware state
+        the library reinitialises -- so without this a settings save would
+        silently undim the display.
+        """
+        try:
+            with open(_STATE_PATH, "r", encoding="utf-8") as handle:
+                stored = json.load(handle).get("brightness")
+        except FileNotFoundError:
+            return                          # never dimmed on this box
+        except Exception as e:
+            logger.warning("Could not read %s: %s", _STATE_PATH, e)
+            return
+
+        if stored not in BRIGHTNESS_LEVELS:
+            logger.warning("Ignoring stored brightness %r", stored)
+            return
+
+        self._brightness = stored
+        self._apply_brightness()
+        logger.info("Brightness restored to %d%%", self._brightness)
+
+    def _save_brightness(self) -> None:
+        """Remember the level for the next start. Best effort by design: losing
+        it costs a button press, so it must never take the display down."""
+        try:
+            with open(_STATE_PATH, "w", encoding="utf-8") as handle:
+                json.dump({"brightness": self._brightness}, handle)
+        except Exception as e:
+            logger.warning("Could not write %s: %s", _STATE_PATH, e)
 
     def _meter_active(self) -> bool:
         return self._level_meter is not None and self._level_meter.running

@@ -141,11 +141,37 @@ a line break and would cut a frame in half.
 What each mode asks of cava — `index.js` writes these, `level_meter.py` expects
 them, and neither end scales anything:
 
-| Mode | bars | channels | ascii_max_range |
-|---|---|---|---|
-| `mono` | 16 | mono | 16 |
-| `stereo` | 16 | stereo | 16 |
-| `rows_edges` / `rows_centre` | 32 | stereo | 4 |
+| Mode | bars | channels | ascii_max_range | autosens |
+|---|---|---|---|---|
+| `mono` | 16 | mono | 16 | 1 |
+| `stereo` | 16 | stereo | 16 | 1 |
+| `rows_edges` / `rows_centre` | 32 | stereo | 4 | 1 |
+| `vu` | 32 | stereo | 80 | **0** |
+
+**`vu` is not a spectrum, and autosens is the whole reason it needed a mode of
+its own.** cava's autosens continuously renormalises so the bars fill the
+display whatever the input — correct for a visualiser, and the one thing a meter
+must not do, since a quiet passage gets pulled up to look like a loud one. With
+`autosens = 0` and a fixed `sensitivity` the output is proportional to signal
+again. It is still not a calibrated VU: no RMS of the waveform, no 300ms
+standard ballistic. It moves with the music and it is honest about *relative*
+level; it does not measure anything.
+
+The reading per channel is the **mean** of that channel's 16 bands, not the
+loudest — the loudest follows whichever frequency happens to dominate and jumps
+about. `ascii_max_range` is 80 because a horizontal bar is 16 cells of 5 pixel
+columns, so cava's range maps one-to-one onto the bar and it glides instead of
+stepping five pixels at a time. Six glyphs: five bar-end fills and a peak
+marker.
+
+Ballistics are ours, not cava's: fast attack, slow release, and a peak that
+holds `VU_PEAK_HOLD` before sliding back. Raw per-frame means are twitchy and
+read as a spectrum.
+
+**Every key in `applyCavaSettings`' list must already exist in the shipped cava
+config.** `replaceInIniSection` replaces, it never adds, and a miss aborts the
+whole write and leaves cava on its old settings. That is why `autosens` and
+`sensitivity` are in the file even though the spectrum modes leave them alone.
 
 **Channel order is an assumption.** cava sends both channels in one array laid
 out for a mirrored display: first half is the left channel high-to-low so bass
@@ -197,11 +223,6 @@ a boot graphic would hold the display before the menu had ever rendered.
 **Screensavers run at 4-15 fps deliberately.** Sustained 60fps is the workload
 that desynced the bus (see "Display driver") and nothing idle needs more. VFDs
 also burn in, so the idle set moves and the clock wanders a column each minute.
-
-**Breathing needs a brightness command the display may not have.**
-`DisplayController` offers only on/off, so the effect declares
-`requires = ('set_brightness',)` and refuses to start rather than blinking the
-panel. Most VFD controllers of this type take one — check the datasheet.
 
 Both hooks are in `menu_manager.py`: boot runs inline in `run()` in place of the
 "Initialising..." message, and the screensaver hangs off
@@ -267,6 +288,25 @@ removing every fixed delay; that is a hardware change. Worth checking first, and
 not determinable from the code: whether the module is a 5V part fed 3.3V logic,
 where V_IH is ~3.5V and every edge is marginal — that would explain the thermal
 sensitivity better than clock scaling alone.
+
+### Brightness
+
+The panel dims, which is not obvious from the wiring. Function Set is
+`0 0 1 DL N F * *` and the bottom two bits are don't-cares on a genuine
+HD44780; this VFD reuses them as an attenuator. Four levels, no finer control:
+100, 75, 50 and 25 percent. 25 is the dimmest step, **not** off — display on/off
+is a different register and the two do not disturb each other.
+
+The bits live in the driver's `displayfunction`, so `resync_display()` restores
+them along with everything else. Held anywhere else, brightness would reset to
+full every ~10s at 60fps.
+
+Brightness is hardware state, so the panel comes up at full on every process
+start. The plugin therefore records the level in
+`/data/configuration/user_interface/retrotuner-ui/state.json` and reapplies it
+in `run()` **before the boot graphic**, or a settings save would silently undim
+the display. That file is written only by the python side; it sits beside
+`config.json` rather than in it so v-conf never fights it.
 
 ### One writer at a time
 

@@ -419,3 +419,119 @@ class TestIdleFallsBackToTheScreensaver:
         m = self._manager(playing=False, meter_running=True)
         m._on_screensaver_idle()
         m._start_screensaver.assert_not_called()
+
+
+def _dimmer_manager(tmp_path, monkeypatch, stored=None):
+    """A manager with just enough state for the dimmer, and its own state file."""
+    state = tmp_path / "state.json"
+    if stored is not None:
+        state.write_text(stored)
+    monkeypatch.setattr(mm, "_STATE_PATH", str(state))
+    m = mm.MenuManager.__new__(mm.MenuManager)
+    m._brightness = mm.BRIGHTNESS_LEVELS[0]
+    m._display = Mock()
+    return m, state
+
+
+class TestBrightnessCycle:
+    """One press steps down a level and wraps at the bottom. 25% is the dimmest
+    step the hardware has, not off, so the cycle never blanks the panel."""
+
+    def test_it_steps_down_through_every_level_and_wraps(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        seen = []
+        for _ in range(len(mm.BRIGHTNESS_LEVELS)):
+            m._cycle_brightness()
+            seen.append(m._brightness)
+        assert seen == list(mm.BRIGHTNESS_LEVELS[1:]) + [mm.BRIGHTNESS_LEVELS[0]]
+
+    def test_the_levels_are_ordered_brightest_first(self):
+        assert list(mm.BRIGHTNESS_LEVELS) == sorted(mm.BRIGHTNESS_LEVELS, reverse=True)
+
+    def test_it_never_turns_the_display_off(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        for _ in range(12):
+            m._cycle_brightness()
+            assert m._brightness in mm.BRIGHTNESS_LEVELS
+        m._display.off.assert_not_called()
+        m._display.toggle.assert_not_called()
+
+    def test_each_step_reaches_the_panel(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        m._display.brightness.assert_called_once_with(mm.BRIGHTNESS_LEVELS[1])
+
+    def test_a_display_that_cannot_dim_does_not_take_the_menu_down(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._display.brightness.side_effect = OSError("no socket")
+        m._cycle_brightness()                      # no exception
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_a_hand_edited_level_falls_back_to_full(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._brightness = 42
+        m._cycle_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+
+class TestBrightnessPersistence:
+    """The panel comes up at full every start -- brightness is hardware state the
+    library reinitialises -- so a settings save would silently undim it."""
+
+    def test_a_press_is_written_out(self, tmp_path, monkeypatch):
+        m, state = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        assert json.loads(state.read_text())["brightness"] == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_it_is_restored_and_pushed_to_the_panel(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{"brightness": 50}')
+        m._restore_brightness()
+        assert m._brightness == 50
+        m._display.brightness.assert_called_once_with(50)
+
+    def test_a_box_that_has_never_dimmed_stays_at_full(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+        m._display.brightness.assert_not_called()
+
+    def test_a_corrupt_state_file_is_ignored(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{not json')
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+
+    def test_a_level_the_hardware_lacks_is_ignored(self, tmp_path, monkeypatch):
+        # 60% would raise ValueError in the library; refuse it here instead.
+        m, _ = _dimmer_manager(tmp_path, monkeypatch, stored='{"brightness": 60}')
+        m._restore_brightness()
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[0]
+        m._display.brightness.assert_not_called()
+
+    def test_an_unwritable_state_file_does_not_take_the_menu_down(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        monkeypatch.setattr(mm, "_STATE_PATH", str(tmp_path / "missing" / "state.json"))
+        m._cycle_brightness()                      # no exception
+        assert m._brightness == mm.BRIGHTNESS_LEVELS[1]
+
+    def test_a_round_trip_survives_a_restart(self, tmp_path, monkeypatch):
+        m, _ = _dimmer_manager(tmp_path, monkeypatch)
+        m._cycle_brightness()
+        m._cycle_brightness()                      # now at 50%
+        fresh, _ = _dimmer_manager(tmp_path, monkeypatch)
+        fresh._restore_brightness()
+        assert fresh._brightness == m._brightness
+
+
+class TestDimmerIsWiredToTheCycle:
+    def test_the_button_cycles_rather_than_toggling(self):
+        # run() builds control_actions, so it cannot be called here; what is
+        # pinned is that the dimmer no longer reaches for display.toggle().
+        source = inspect.getsource(mm.MenuManager.run)
+        assert "'btn_dimmer': self._cycle_brightness" in source
+        assert "self._display.toggle()" not in source
+
+    def test_the_boot_graphic_runs_at_the_restored_level(self):
+        # Restore has to happen before anything is drawn, or the boot graphic
+        # flashes at full brightness on every restart.
+        source = inspect.getsource(mm.MenuManager.run)
+        assert source.index("_restore_brightness") < source.index("_play_boot_effect")

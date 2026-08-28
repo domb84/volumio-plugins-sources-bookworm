@@ -476,6 +476,10 @@
             {
               "value": "rows_centre",
               "label": "Stereo rows - grow out from the centre"
+            },
+            {
+              "value": "vu",
+              "label": "VU meters - one level bar per channel, with peak hold"
             }
           ]
         }
@@ -486,7 +490,7 @@
       "element": "section",
       "label": "Screen Effects",
       "icon": "fa-magic",
-      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Some effects draw a graphic and ignore the text entirely - the travelling wave and the big clock. Breathing needs a display that can dim, which this one may not: if it cannot, the effect declines to start and says so in the log.",
+      "description": "A graphic while the plugin starts, and an idle screen for when nothing is playing. The level meter already covers the idle case while something plays, so the screensaver only appears once playback has stopped and the countdown below has run out. Any button press dismisses it. Leave the text boxes empty to use the device name; only the first 16 characters fit. Some effects draw a graphic and ignore the text entirely - the travelling wave and the big clock.",
       "onSave": {
         "type": "controller",
         "endpoint": "user_interface/retrotuner-ui",
@@ -582,10 +586,6 @@
             {
               "value": "marquee",
               "label": "Marquee - line 1 scrolls, line 2 stays put"
-            },
-            {
-              "value": "breathe",
-              "label": "Breathing - the panel fades up and down"
             },
             {
               "value": "clock",

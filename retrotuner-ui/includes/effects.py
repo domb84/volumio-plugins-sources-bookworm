@@ -74,8 +74,6 @@ class Effect:
     duration = None       # seconds, or None to loop until stopped
     uses_text = True
     uses_line2 = True
-    # Display controller methods the effect needs; it refuses to start without them.
-    requires = ()
 
     def glyphs(self):
         """CGRAM bitmaps to load before the first frame. At most 8."""
@@ -83,10 +81,6 @@ class Effect:
 
     def frame(self, t, line1, line2):
         raise NotImplementedError
-
-    def brightness(self, t):
-        """0..1 for effects that dim the panel, or None to leave it alone."""
-        return None
 
 
 # ---- Boot ----------------------------------------------------------------
@@ -333,20 +327,6 @@ class Marquee(Effect):
         return _compose(window, _centre(line2))
 
 
-class Breathe(Effect):
-    id = 'breathe'
-    label = 'Breathing'
-    fps = 4
-    # No brightness command, no effect: the panel would blink rather than fade.
-    requires = ('set_brightness',)
-
-    def frame(self, t, line1, line2):
-        return _compose(_centre(line1), _centre(line2))
-
-    def brightness(self, t):
-        return 0.18 + 0.82 * (0.5 - 0.5 * math.cos(t / 1.9))
-
-
 class BigClock(Effect):
     id = 'clock'
     label = 'Big clock'
@@ -420,7 +400,7 @@ class BigClock(Effect):
 # ---- Registry ------------------------------------------------------------
 
 BOOT_EFFECTS = (SplitFlap, PowerOnTest, Wipe, Typewriter, SlideIn, MeterTease)
-SCREENSAVER_EFFECTS = (Wave, Bounce, Marquee, Breathe, BigClock)
+SCREENSAVER_EFFECTS = (Wave, Bounce, Marquee, BigClock)
 
 SUPPORTED_BOOT_EFFECTS = (NONE,) + tuple(e.id for e in BOOT_EFFECTS)
 SUPPORTED_SCREENSAVER_EFFECTS = (NONE,) + tuple(e.id for e in SCREENSAVER_EFFECTS)
@@ -466,21 +446,9 @@ class EffectPlayer:
     def running(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def _missing_capability(self):
-        """The first capability the effect needs and the display does not have."""
-        for name in self._effect.requires:
-            if not callable(getattr(self._display, name, None)):
-                return name
-        return None
-
     def start(self):
         """Start drawing on a thread. Returns True if it was started."""
         if self._effect is None or self.running:
-            return False
-        missing = self._missing_capability()
-        if missing is not None:
-            logger.warning("Effect %s needs display.%s(), which this display does "
-                           "not have; not starting", self._effect.id, missing)
             return False
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="EffectThread",
@@ -498,8 +466,6 @@ class EffectPlayer:
     def play(self):
         """Run a boot effect to completion on this thread."""
         if self._effect is None:
-            return False
-        if self._missing_capability() is not None:
             return False
         self._stop.clear()
         self._run()
@@ -522,20 +488,10 @@ class EffectPlayer:
         for location, bitmap in enumerate(bitmaps):
             self._menu.create_char(location, bitmap)
 
-    def _set_brightness(self, level):
-        setter = getattr(self._display, 'set_brightness', None)
-        if setter is None:
-            return
-        try:
-            setter(level)
-        except Exception as e:
-            logger.debug("Brightness set failed: %s", e)
-
     def _run(self):
         effect = self._effect
         interval = 1.0 / effect.fps if effect.fps > 0 else 1.0
         started = time.monotonic()
-        last_brightness = None
         try:
             self._resync()
             self._load_glyphs()
@@ -548,11 +504,6 @@ class EffectPlayer:
                                                          self._line1, self._line2))
                     break
 
-                level = effect.brightness(t)
-                if level is not None and level != last_brightness:
-                    self._set_brightness(level)
-                    last_brightness = level
-
                 self._menu.render_frame(effect.frame(t, self._line1, self._line2))
 
                 remaining = interval - (time.monotonic() - now)
@@ -561,8 +512,6 @@ class EffectPlayer:
         except Exception as e:
             logger.error("Effect %s stopped on error: %s", effect.id, e)
         finally:
-            if last_brightness is not None:
-                self._set_brightness(1.0)
             # A long screensaver run is the same workload that desyncs the bus.
             self._resync()
             if self._on_stop is not None:

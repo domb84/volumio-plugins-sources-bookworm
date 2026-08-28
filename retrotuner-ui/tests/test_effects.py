@@ -248,41 +248,6 @@ class TestEffectPlayer:
             player.stop()
 
 
-class TestBrightnessCapability:
-    """Breathing is the one effect that needs more than the display currently does."""
-
-    def test_breathe_declares_what_it_needs(self):
-        assert 'set_brightness' in effects.Breathe.requires
-
-    def test_it_refuses_to_start_without_a_dimmable_display(self, caplog):
-        display = Mock(spec=['on', 'toggle'])      # what DisplayController has today
-        player = effects.EffectPlayer(Mock(spec=['render_frame', 'create_char']),
-                                      effects.Breathe(), display=display)
-        assert player.start() is False
-        assert 'set_brightness' in caplog.text
-
-    def test_it_runs_and_dims_when_the_display_can(self):
-        display = Mock(spec=['set_brightness'])
-        menu = Mock(spec=['render_frame', 'create_char'])
-        player = effects.EffectPlayer(menu, effects.Breathe(), display=display)
-        assert player.start() is True
-        try:
-            deadline = time.monotonic() + 2.0
-            while not display.set_brightness.called and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert display.set_brightness.called
-        finally:
-            player.stop()
-        # Full brightness restored, or the panel is left dim under the menu.
-        assert display.set_brightness.call_args[0][0] == 1.0
-
-    def test_effects_that_do_not_dim_leave_brightness_alone(self):
-        display = Mock(spec=['set_brightness'])
-        menu = Mock(spec=['render_frame', 'create_char', 'resync_display'])
-        effects.EffectPlayer(menu, _TwoFrames(), display=display).play()
-        assert not display.set_brightness.called
-
-
 class TestConfigWiring:
     """The effect ids live in three files that cannot import each other:
     includes/effects.py, config.json and UIConfig.json. index.js carries the

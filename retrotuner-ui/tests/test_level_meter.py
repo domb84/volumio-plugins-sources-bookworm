@@ -10,19 +10,29 @@ from includes.level_meter import (
     FRAME_INTERVAL,
     FRAMES_PER_SECOND,
     LCD_COLUMNS,
+    LCD_ROWS,
     MAX_LEVEL,
     MODE_MONO,
     MODE_ROWS_CENTRE,
     MODE_ROWS_EDGES,
     MODE_STEREO,
+    MODE_VU,
     SPLIT_DOWN_GLYPHS,
     SPLIT_LEVELS,
     SPLIT_UP_GLYPHS,
     SUPPORTED_FRAME_RATES,
     SUPPORTED_MODES,
     frame_interval,
+    VU_COLUMNS,
+    VU_FILL_GLYPHS,
+    VU_PEAK_GLYPH,
+    VU_PEAK_HOLD,
     render_split,
+    render_vu,
+    render_vu_row,
     split_bitmaps,
+    vu_bitmaps,
+    vu_level,
     split_channels,
     LevelMeter,
     bar_bitmaps,
@@ -531,3 +541,158 @@ class TestDisplayResync:
         meter._run()
 
         menu.create_char.assert_called()   # got past the resync and carried on
+
+class TestVuBitmaps:
+    """Six glyphs: five bar-end fills and a peak marker. Well inside the 8 slots,
+    which is what lets the VU mode carry a marker the spectrum modes cannot."""
+
+    def test_there_are_six_and_they_fit_the_budget(self):
+        assert len(vu_bitmaps()) == 6 <= 8
+
+    def test_each_glyph_is_eight_rows_of_five_bits(self):
+        for glyph in vu_bitmaps():
+            assert len(glyph) == CELL_ROWS
+            assert all(0 <= row <= 0b11111 for row in glyph)
+
+    def test_the_fills_grow_from_the_left(self):
+        # Left-aligned, because a horizontal bar grows from the left edge; the
+        # split-mode glyphs grow from an edge of the cell for the same reason.
+        for width, glyph in enumerate(vu_bitmaps()[:5], start=1):
+            expected = 0
+            for column in range(width):
+                expected |= 0b10000 >> column
+            assert set(glyph) == {expected}
+
+    def test_the_last_glyph_is_a_single_column_marker(self):
+        assert set(vu_bitmaps()[5]) == {0b00100}
+
+
+class TestVuLevel:
+    def test_it_is_the_mean_of_the_bands(self):
+        assert vu_level([10, 20, 30]) == 20
+
+    def test_no_bands_reads_as_silence(self):
+        assert vu_level([]) == 0.0
+
+    def test_one_loud_band_does_not_peg_the_meter(self):
+        # The point of a mean over a max: a single dominant frequency should not
+        # look like a full-scale signal.
+        assert vu_level([80, 0, 0, 0]) == 20
+
+
+class TestRenderVu:
+    def test_a_row_is_exactly_the_display_width(self):
+        assert len(render_vu_row(0, 0)) == LCD_COLUMNS
+        assert len(render_vu_row(VU_COLUMNS, VU_COLUMNS)) == LCD_COLUMNS
+
+    def test_a_full_frame_is_two_rows(self):
+        rows = render_vu(40, 20, 60, 30).split("\n")
+        assert len(rows) == LCD_ROWS
+        assert all(len(row) == LCD_COLUMNS for row in rows)
+
+    def test_every_glyph_code_stays_in_the_loaded_slots(self):
+        # And well clear of 0x0A, which lcd_render would treat as a row break.
+        loaded = len(vu_bitmaps())
+        for level in range(0, VU_COLUMNS + 1, 7):
+            for ch in render_vu_row(level, VU_COLUMNS - level):
+                assert ch == ' ' or ord(ch) < loaded
+
+    def test_a_full_bar_fills_every_cell(self):
+        assert render_vu_row(VU_COLUMNS, 0) == chr(VU_FILL_GLYPHS[4]) * LCD_COLUMNS
+
+    def test_silence_with_a_peak_shows_only_the_marker(self):
+        row = render_vu_row(0, VU_COLUMNS)
+        assert row.count(chr(VU_PEAK_GLYPH)) == 1
+        assert row.strip(' ' + chr(VU_PEAK_GLYPH)) == ''
+
+    def test_the_bar_advances_five_sub_columns_per_cell(self):
+        # 16 cells x 5 pixel columns, so a whole cell is 5 steps -- the reason
+        # cava is asked for ascii_max_range 80 in this mode and not 16.
+        assert render_vu_row(5, 0).startswith(chr(VU_FILL_GLYPHS[4]) + ' ')
+        assert render_vu_row(6, 0)[1] == chr(VU_FILL_GLYPHS[0])
+
+    def test_the_peak_is_not_drawn_inside_the_bar(self):
+        row = render_vu_row(VU_COLUMNS, 10)
+        assert chr(VU_PEAK_GLYPH) not in row
+
+
+class TestVuBallistics:
+    """Fast up, slow down, and a peak that holds before it falls. Without this
+    the bar follows every frame and looks like a spectrum rather than a meter."""
+
+    def _meter(self):
+        return LevelMeter(Mock(), bars_path='/nonexistent', mode=MODE_VU)
+
+    def test_it_rises_faster_than_it_falls(self):
+        meter = self._meter()
+        rise, _ = meter._step_vu(0, 80, 0.0)
+        meter._vu[1] = 80.0
+        meter._vu_peak[1] = 80.0
+        fall, _ = meter._step_vu(1, 0, 0.0)
+        assert rise > 80 - fall          # covered more ground going up
+
+    def test_it_converges_on_a_held_level(self):
+        meter = self._meter()
+        for _ in range(60):
+            level, _ = meter._step_vu(0, 40, 0.0)
+        assert abs(level - 40) < 1
+
+    def test_the_peak_follows_the_bar_up_immediately(self):
+        meter = self._meter()
+        level, peak = meter._step_vu(0, 80, 0.0)
+        assert peak == level
+
+    def test_the_peak_holds_while_the_bar_drops(self):
+        meter = self._meter()
+        _, peak = meter._step_vu(0, 80, 0.0)
+        held = peak
+        for _ in range(5):
+            _, peak = meter._step_vu(0, 0, 0.5)      # inside VU_PEAK_HOLD
+        assert peak == held
+
+    def test_the_peak_falls_once_the_hold_expires(self):
+        meter = self._meter()
+        _, held = meter._step_vu(0, 80, 0.0)
+        _, peak = meter._step_vu(0, 0, VU_PEAK_HOLD + 1.0)
+        assert peak < held
+
+    def test_the_peak_never_falls_below_the_bar(self):
+        meter = self._meter()
+        meter._step_vu(0, 80, 0.0)
+        for _ in range(200):
+            level, peak = meter._step_vu(0, 40, 100.0)
+        assert peak >= level
+
+    def test_the_channels_do_not_share_a_needle(self):
+        meter = self._meter()
+        meter._step_vu(0, 80, 0.0)
+        level, _ = meter._step_vu(1, 0, 0.0)
+        assert level == 0
+
+
+class TestVuFrames:
+    def test_a_cava_line_becomes_a_two_row_frame(self):
+        meter = LevelMeter(Mock(), bars_path='/nonexistent', mode=MODE_VU)
+        line = ';'.join(['40'] * (LCD_COLUMNS * 2))
+        frame, levels = meter._build_frame(line)
+        assert len(levels) == LCD_COLUMNS * 2
+        rows = frame.split('\n')
+        assert len(rows) == LCD_ROWS and all(len(r) == LCD_COLUMNS for r in rows)
+
+    def test_an_empty_line_draws_nothing(self):
+        meter = LevelMeter(Mock(), bars_path='/nonexistent', mode=MODE_VU)
+        frame, levels = meter._build_frame('')
+        assert frame is None and not levels
+
+    def test_vu_is_not_a_split_mode(self):
+        # It reads the same 32-bar stereo stream but spends no glyphs on the
+        # up/down pairs, which is what leaves room for the peak marker.
+        assert not LevelMeter(Mock(), bars_path='/x', mode=MODE_VU)._split
+
+    def test_it_loads_the_vu_glyphs_and_not_the_bars(self):
+        menu = Mock()
+        meter = LevelMeter(menu, bars_path='/nonexistent', mode=MODE_VU)
+        meter._load_glyphs()
+        assert menu.create_char.call_count == len(vu_bitmaps())
+        loaded = [call[0][1] for call in menu.create_char.call_args_list]
+        assert loaded == vu_bitmaps()

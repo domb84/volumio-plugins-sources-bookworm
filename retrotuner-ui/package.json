@@ -1,6 +1,6 @@
 {
 	"name": "retrotuner-ui",
-	"version": "3.4.0",
+	"version": "3.5.0",
 	"description": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
 	"main": "index.js",
 	"scripts": {
@@ -21,7 +21,7 @@
 			"bookworm"
 		],
 		"details": "Control Volumio via a 16x2 display, rotary encoder and resistor ladder buttons",
-		"changelog": "3.4.0: Added boot graphics and an idle screensaver for when nothing is playing, with a choice of effects and custom text. Fixed the display corrupting after long spells of level meter rendering, and the idle meter not appearing unless a button had been pressed first. 3.3.0: The level meter now appears automatically after 30 seconds idle, and adds refresh rate and layout settings including two stereo modes. 3.2.0: Added an audio level meter, shown by long-pressing the dimmer. Fixed radio stations showing no track information. 3.1.0: Button reads rewritten to match raw ADC values with tolerance bands, median sampling and hysteresis - fixes missed and misread presses. Fixed Spotify tracks not playing. Added Play All for playlists, albums and folders from any source. SPI is now enabled in the boot config automatically. 3.0.0: Renamed project. Improved code quality and performance. Added additional controls.",
+		"changelog": "3.5.0: The dimmer button now steps through four brightness levels instead of switching the display off, and the level is remembered across restarts. Added a VU meter layout to the level meter. 3.4.0: Added boot graphics and an idle screensaver for when nothing is playing, with a choice of effects and custom text. Fixed the display corrupting after long spells of level meter rendering, and the idle meter not appearing unless a button had been pressed first. 3.3.0: The level meter now appears automatically after 30 seconds idle, and adds refresh rate and layout settings including two stereo modes. 3.2.0: Added an audio level meter, shown by long-pressing the dimmer. Fixed radio stations showing no track information. 3.1.0: Button reads rewritten to match raw ADC values with tolerance bands, median sampling and hysteresis - fixes missed and misread presses. Fixed Spotify tracks not playing. Added Play All for playlists, albums and folders from any source. SPI is now enabled in the boot config automatically. 3.0.0: Renamed project. Improved code quality and performance. Added additional controls.",
 		"has_alsa_contribution": true
 	},
 	"engines": {
