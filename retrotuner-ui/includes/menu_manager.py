@@ -214,8 +214,11 @@ class MenuManager:
                 elif 'playing' in queueItem:
                     self._playing = queueItem['playing']
                     if self._playing:
-                        # Music started: the meter or the track is the better idle screen.
+                        # Music started: the meter or the track is the better idle
+                        # screen. Both pushes arrive without a button press, so each
+                        # re-arms its own countdown. See NOTES.md ("Level meter").
                         self._stop_screensaver()
+                        self._reset_idle_timer()
                     else:
                         # A stop is itself a trigger, so it arrives without a button press.
                         self._reset_screensaver_timer()

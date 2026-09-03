@@ -327,6 +327,21 @@ class LevelMeter:
         except Exception:
             return False
 
+    @staticmethod
+    def _drain(fd):
+        """Throw away whatever is already queued in the fifo.
+
+        Nothing reads it while the meter is off, so it fills and cava blocks on
+        the write -- the first frames after an open are minutes old. The bound is
+        one pipeful, which is all the kernel can be holding. See NOTES.md ("cava").
+        """
+        for _ in range(MAX_PENDING // READ_CHUNK):
+            try:
+                if not os.read(fd, READ_CHUNK):
+                    return
+            except (BlockingIOError, InterruptedError):
+                return
+
     def _resync_display(self):
         """Re-run the display's 4-bit handshake at a meter boundary.
 
@@ -395,6 +410,7 @@ class LevelMeter:
             self._load_glyphs()
             # Non-blocking, and a raw fd: readline() can't say "nothing yet" at end of file.
             fd = os.open(self._bars_path, os.O_RDONLY | os.O_NONBLOCK)
+            self._drain(fd)
 
             while not self._stop.is_set():
                 started = time.monotonic()

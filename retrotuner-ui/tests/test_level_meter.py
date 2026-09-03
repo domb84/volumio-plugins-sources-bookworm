@@ -3,9 +3,12 @@
 All pure logic -- nothing here touches a display or a fifo. The signal
 processing lives in cava, so there is none to test here.
 """
+import inspect
 from unittest.mock import Mock
 
+import includes.level_meter as lm
 from includes.level_meter import (
+    MAX_PENDING,
     CELL_ROWS,
     FRAME_INTERVAL,
     FRAMES_PER_SECOND,
@@ -242,6 +245,56 @@ class TestQuietStart:
         meter = LevelMeter(menu, bars_path='/nonexistent')
         assert meter.start() is False
         menu.message.assert_called_once()
+
+
+class TestStaleFramesAreDropped:
+    """Nothing reads the fifo while the meter is off, so it fills and cava blocks
+    on the write. Without a drain the first frames drawn are minutes old."""
+
+    def _reads(self, chunks):
+        """os.read over a canned list; BlockingIOError once it runs out."""
+        calls = []
+
+        def read(fd, size):
+            calls.append(size)
+            if not chunks:
+                raise BlockingIOError
+            return chunks.pop(0)
+
+        return read, calls
+
+    def test_it_reads_until_the_fifo_is_empty(self, monkeypatch):
+        read, calls = self._reads([b'1;2;\n', b'3;4;\n'])
+        monkeypatch.setattr(lm.os, 'read', read)
+        LevelMeter._drain(3)
+        assert len(calls) == 3          # two chunks, then the empty read
+
+    def test_a_closed_writer_ends_it(self, monkeypatch):
+        # No writer means read returns b'' forever, not BlockingIOError.
+        read, calls = self._reads([b''])
+        monkeypatch.setattr(lm.os, 'read', read)
+        LevelMeter._drain(3)
+        assert len(calls) == 1
+
+    def test_the_run_loop_drains_before_it_draws(self, monkeypatch):
+        # _run() owns the display and loops, so it cannot be called here. The
+        # drain has to happen on the open, not on the first frame.
+        source = inspect.getsource(LevelMeter._run)
+        opened = source.index("os.open(self._bars_path")
+        drained = source.index("self._drain(")
+        loop = source.index("while not self._stop.is_set()")
+        assert opened < drained < loop
+
+    def test_it_gives_up_after_one_pipeful(self, monkeypatch):
+        # A writer faster than the drain must not hold the display hostage.
+        def read(fd, size):
+            calls.append(size)
+            return b'x' * size
+
+        calls = []
+        monkeypatch.setattr(lm.os, 'read', read)
+        LevelMeter._drain(3)
+        assert sum(calls) == MAX_PENDING
 
 
 class TestFrameRateMatchesCava:

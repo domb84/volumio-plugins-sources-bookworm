@@ -350,6 +350,16 @@ class TestIdleCountdownsAreArmedAtStartup:
         loop = source.index("while not (self.stop_event")
         assert armed < loop
 
+    def test_playback_starting_re_arms_the_countdown(self):
+        # The push that dismisses the screensaver arrives without a button press,
+        # so nothing else re-arms: without this the meter never came up on a boot
+        # where no control was touched. Scoped to the branch, because the
+        # control-action branch calls the same thing.
+        source = inspect.getsource(mm.MenuManager.run)
+        start = source.index("if self._playing:")
+        branch = source[start:source.index("else:", start)]
+        assert "self._reset_idle_timer()" in branch
+
     def _manager(self, timeout=30.0, effect='wave'):
         m = mm.MenuManager.__new__(mm.MenuManager)
         m._idle_timer = None
