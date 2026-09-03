@@ -114,6 +114,14 @@ logged. Check a key is there, and what range it takes, before adding it.
 index.js** from the settings page. Editing them by hand is undone on the next
 save.
 
+**Nothing drains `/tmp/retrotuner-bars` while the meter is off.** cava holds its
+own read fd on it and never reads, so the pipe fills — about two minutes at
+60fps — and cava blocks in its write. Playback is unaffected: the input thread
+carries on draining the tap, which is the only part audio depends on. But the
+64kB left sitting there is stale, so `LevelMeter._drain()` empties it on open
+rather than drawing minutes-old frames. This is why restarting cava looked like
+a fix: it destroys the pipe and its contents along with it.
+
 cava scales its `gravity` falloff relative to framerate, so changing the rate
 changes how the bars decay — worth a look if a rate change makes the levels
 read differently.
@@ -185,6 +193,12 @@ one alone just buys duplicate or dropped frames.
 `SILENCE_TIMEOUT` counts from the last frame with any signal in it. cava's bars
 decay gradually and that decay counts as sound, so what you see is several
 seconds longer than the constant.
+
+**The idle meter only appears if a countdown is running.** `_on_menu_idle` fires
+once and does not re-arm, so every trigger that reaches it without a button
+press has to arm its own: `run()` at startup, a control action, and the `playing`
+push. Miss one and the symptom is silent — the menu simply sits there, and a
+single button press hides it by arming the timer the normal way.
 
 ## Screen effects (`includes/effects.py`)
 
